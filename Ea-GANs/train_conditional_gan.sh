@@ -1,0 +1,21 @@
+python train.py \
+  --dataroot /media/disk1/saeedeh_danaei/ncct_cect/vindr_ds \
+  --name conditional_ct_gan \
+  --model gea_gan \
+  --which_model_netG unet_128 \
+  --which_direction AtoB \
+  --lambda_A 300 \
+  --dataset_mode csv_aligned \
+  --use_dropout \
+  --batchSize 2 \
+  --niter 100 \
+  --niter_decay 50 \
+  --lambda_sobel 100 \
+  --labelSmooth \
+  --rise_sobelLoss \
+  --fineSize 128 \
+  --input_nc 1 \
+  --output_nc 1 \
+  --gpu_ids 0 \
+  --display_id 0 \
+  --norm instance 

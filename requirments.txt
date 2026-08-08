@@ -1,0 +1,4 @@
+cupy
+chainer>= 7.1.0
+chainerui
+chainercv

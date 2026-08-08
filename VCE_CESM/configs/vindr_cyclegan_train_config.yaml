@@ -1,0 +1,78 @@
+seed: 0
+exp_name: cyclegan_public
+
+device:
+  cuda_device: cuda
+  gpu_num_workers: 4
+
+data:
+  cv: 5
+  img_dir: /media/disk1/saeedeh_danaei/ncct_cect/vindr_ds
+  fold_public_dir: ./data/processed/folds_public
+  img_dim: 256
+  model_dir: ./models
+  report_dir: ./reports
+  batch_size: 8
+
+model:
+  model_name: cycle_gan
+  SAVE_MODEL: True
+
+trainer:
+  optimizer:
+    lr: 0.00001
+  early_stopping: 50
+  warm_up: 50
+  max_epochs: 300
+  LAMBDA_IDENTITY: 5
+  LAMBDA_CYCLE: 10
+  CHECKPOINT_GEN_REC: "genrec.pth.tar"
+  CHECKPOINT_GEN_LE: "genle.pth.tar"
+  CHECKPOINT_CRITIC_REC: "criticrec.pth.tar"
+  CHECKPOINT_CRITIC_LE: "criticle.pth.tar"
+
+
+
+# # Dataset Configuration
+# dataset:
+#   root_dir: "/media/disk1/saeedeh_danaei/ncct_cect/vindr_ds"
+#   pairs_csv: "series_pairs.csv"
+#   slice_selection: "middle"  # Options: "middle", "all", or number of slices
+#   max_slices: 32  # Only used if slice_selection is "all"
+#   train_val_split: 0.8  # 80% training, 20% validation
+
+# # Training Configuration
+# training:
+#   batch_size: 4
+#   num_workers: 4
+#   num_epochs: 100
+#   learning_rate: 0.0002
+#   beta1: 0.5  # For Adam optimizer
+#   lambda_cycle: 10.0  # Cycle consistency loss weight
+#   lambda_identity: 5.0  # Identity loss weight
+#   save_frequency: 5  # Save model every N epochs
+  
+# # Model Configuration
+# model:
+#   input_nc: 1  # Number of input channels (grayscale)
+#   output_nc: 1  # Number of output channels
+#   ngf: 64  # Number of generator filters
+#   ndf: 64  # Number of discriminator filters
+#   n_blocks: 9  # Number of ResNet blocks
+#   use_dropout: True
+  
+# # Paths Configuration
+# paths:
+#   checkpoints_dir: "checkpoints/vindr"
+#   results_dir: "results/vindr"
+#   log_dir: "logs/vindr"
+
+# # Hardware Configuration
+# hardware:
+#   gpu_ids: [0]  # List of GPU IDs to use
+  
+# # Logging Configuration
+# logging:
+#   tensorboard: True
+#   images_frequency: 100  # Log images every N iterations
+#   metrics_frequency: 100  # Log metrics every N iterations 

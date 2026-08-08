@@ -1,0 +1,27 @@
+# Deps for the ResViT benchmark path (adapters + the ResViT submodule).
+# Install into a DEDICATED env on the GPU server (do not merge with SynDiff /
+# CFPS-Diff envs — their torch pins conflict). CUDA >= 11.2 assumed.
+#
+#   python -m venv .venv_resvit && source .venv_resvit/bin/activate
+#   pip install -r requirements_resvit.txt
+#
+# ResViT is 2021-era pix2pix code. run_resvit.sh applies two small, idempotent
+# source shims at setup time (compare_psnr -> peak_signal_noise_ratio, and the
+# dead scipy.misc.imresize import) so it runs on a modern scikit-image/scipy.
+
+# --- deep learning (pick the torch build matching your CUDA) ---
+torch>=1.7.1
+torchvision>=0.8.2
+
+# --- ResViT runtime ---
+ml_collections
+dominate
+visdom
+scikit-image
+scipy
+h5py
+
+# --- our NIfTI <-> slice adapters (prep_benchmark_data.py, reassemble_nifti.py) ---
+numpy
+nibabel
+Pillow

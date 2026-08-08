@@ -1,0 +1,4 @@
+torch==0.4.1
+scikit-image==0.14.2
+SimpleITK==1.2.0
+numpy==1.15.0

@@ -1,0 +1,97 @@
+# =============================================================================
+# Model weights / checkpoints
+# =============================================================================
+*.pth
+*.pt
+*.h5
+*.onnx
+*.ckpt
+*.pb
+*.npz
+*.npy
+*.pkl
+*.safetensors
+
+# =============================================================================
+# Archives and downloaded packages (never commit these — use requirements_*.txt)
+# =============================================================================
+*.whl
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+# partial / in-flight downloads
+*.crdownload
+*.part
+*.download
+# extensionless zip of the Ea-GANs upstream repo
+/Ea_GANs
+
+# =============================================================================
+# Python execution artifacts
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# =============================================================================
+# Environments
+# =============================================================================
+*_env
+.env
+.venv/
+venv/
+env/
+
+# =============================================================================
+# Medical imaging data (was missing the leading '*' — matched nothing before)
+# =============================================================================
+*.nii
+*.nii.gz
+*.dcm
+*.nrrd
+*.mha
+*.mhd
+*.raw
+
+# =============================================================================
+# Datasets and run outputs
+#
+# NOTE: the benchmark repos (ResViT/, CyTran/, SynDiff/, CFPS-Diff/) are now
+# vendored as plain directories, so every pattern here reaches inside them. A
+# bare `data/` or `datasets/` would swallow ResViT/data/aligned_dataset.py,
+# CyTran/data/vindr_dataset.py and friends. Anchor them, and ignore only the
+# prepped-slice output that prep_benchmark_data.py writes.
+# =============================================================================
+/data/
+/pars_CT/
+/test_dataset_output/
+/batch*
+*/datasets/vindr/
+*/datasets/vindr_*/
+checkpoints/
+results/
+runs/
+outputs/
+samples/
+wandb/
+*.log
+
+# =============================================================================
+# Editor / OS
+# =============================================================================
+.DS_Store
+.vscode/
+.idea/
+
+
+
+ResViT/models/vit_checkpoints/R50+ViT-B_16.npz

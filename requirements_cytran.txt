@@ -1,0 +1,31 @@
+# Deps for the CyTran benchmark path (adapters + the CyTran submodule).
+# Install into a DEDICATED env on the GPU server (do not merge with SynDiff /
+# CFPS-Diff envs — their torch pins conflict). CyTran's README asks for torch
+# 1.7.x; anything >=1.7 works, so this env can be shared with ResViT if you want
+# one less venv.
+#
+#   python -m venv .venv_cytran && source .venv_cytran/bin/activate
+#   pip install -r requirements_cytran.txt
+#
+# run_cytran.sh applies two idempotent source shims at setup (the leftover
+# `pix2pix.` import prefix in data/__init__.py and models/__init__.py) and copies
+# our data/vindr_dataset.py in. Note that CyTran's own test.py and
+# data/ct_dataset.py still use the removed `np.float` alias — our path imports
+# neither, so they are left alone.
+
+# --- deep learning (pick the torch build matching your CUDA) ---
+torch>=1.7.1
+torchvision>=0.8.2
+
+# --- CyTran runtime ---
+einops          # ConvTransformer's rearrange
+dominate        # util/html.py, imported by the visualizer
+visdom          # only touched when --display_id > 0 (we pass 0), but imported lazily
+scikit-image
+pandas
+
+# --- our NIfTI <-> slice adapters (prep_benchmark_data.py, reassemble_nifti.py,
+#     infer_cytran.py) ---
+numpy
+nibabel
+Pillow

@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 15 https://github.com)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 15 \"https://www.googleapis.com/download/storage/v1/b/vit_models/o/imagenet21k%2FR50%2BViT-B_16.npz?alt=media\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 15 https://hf-mirror.com)",
+      "Bash(curl -s --max-time 20 \"https://huggingface.co/search/full-text?q=R50%2BViT-B_16.npz&type=model\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 15 https://www.modelscope.cn)",
+      "Bash(curl -s --max-time 20 -X POST \"https://www.modelscope.cn/api/v1/dolphin/models\" -H \"Content-Type: application/json\" -d '{\"Name\":\"TransUNet\",\"PageSize\":20,\"PageNumber\":1}')",
+      "Bash(echo \"=== get_scheduler ===\" && sed -n '/def get_scheduler/,/^def /p' models/networks.py && echo \"=== base_dataset head ===\" && sed -n '1,60p' data/base_dataset.py && echo \"=== models/__init__ find ===\" && grep -n \"importlib\\\\|import_module\" models/__init__.py)",
+      "Bash(chmod +x run_cytran.sh)",
+      "Bash(bash -n run_cytran.sh)",
+      "Bash(./run_cytran.sh setup *)",
+      "Bash(python3 -c \"import torch, einops; print\\('torch', torch.__version__, 'einops ok'\\)\")",
+      "Bash(python3 -c \"import numpy, PIL, nibabel; print\\('adapters deps ok'\\)\")",
+      "Bash(sed -n '/class Attention/,/class Transformer/p' models/conv_transformer.py)",
+      "Bash(sed -n '/class Transformer/,$p' models/conv_transformer.py)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m py_compile infer_cytran.py cytran_vindr_dataset.py)",
+      "Bash(git submodule *)",
+      "Bash(git -C CyTran status --short)",
+      "Bash(git -C ResViT status --short)",
+      "Bash(git -C CyTran remote -v)",
+      "Bash(git -C CyTran diff --stat)",
+      "Bash(git -C ResViT remote -v)",
+      "Bash(git -C CyTran diff)",
+      "Bash(git status *)",
+      "Bash(xargs -0 du -k)",
+      "Bash(awk '$1>5000{printf \"%.1f MB  %s\\\\n\",$1/1024,$2}')",
+      "Bash(echo \"data/vindr_dataset.py  # installed by ../run_cytran.sh setup\")",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git -C ResViT checkout -- util/visualizer.py train.py)",
+      "Bash(PYTHON=echo ./run_resvit.sh test)",
+      "Bash(python3 -m py_compile ResViT/util/visualizer.py ResViT/train.py)",
+      "Bash(bash -n run_resvit.sh)",
+      "Bash(git -C ResViT diff --stat)",
+      "Bash(grep -Ev '\\\\.\\(npz|pth|pt|png|jpg|whl|tar\\\\.gz|zip|pyc|nii|nii\\\\.gz|log\\)$')",
+      "Bash(grep -E '\\\\.\\(py|sh|md|json|yaml|yml|txt|cfg|toml|ipynb\\)$')",
+      "Bash(grep -E '\\\\.\\(py|sh|md|json|yaml|yml|txt\\)$')",
+      "Bash(git ls-remote *)"
+    ],
+    "additionalDirectories": [
+      "/Users/macbook/develope/thesis/ncct2cect/CyTran/models"
+    ]
+  }
+}
