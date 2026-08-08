@@ -12,7 +12,7 @@ identically. Nothing about a model's internals matters to the harness — only t
 it produces those volumes for the shared test cases.
 
 **Fairness:** all models train and evaluate on the *same* case-level split
-(`../synthetic_CECT/benchmark/split.json`, seed 42) and are scored on the same
+(`../synthetic_CECT/splits/split.json`, seed 42) and are scored on the same
 test cases, masks, and HU window. Retraining these repos on our data at our scale
 does **not** reproduce their papers' headline numbers — this is a controlled
 same-data comparison, not a reproduction.
@@ -72,7 +72,7 @@ their internals:
 ### ResViT (do first — template for CyTran)
 ```bash
 # 1. our NIfTI → pix2pix AB-PNG slices on the shared split
-python prep_benchmark_data.py --split ../synthetic_CECT/benchmark/split.json \
+python prep_benchmark_data.py --split ../synthetic_CECT/splits/split.json \
     --format pix2pix --out ResViT/datasets/vindr --size 256
 
 # 2. train  (single-channel CT; AtoB = NCCT→CECT). See ResViT/README for the
@@ -103,14 +103,17 @@ the identical layout. Train per CyTran/README pointing `--dataroot` at
 (check its generated-slice suffix).
 
 ### SynDiff
+Fully driven by [`run_syndiff.sh`](run_syndiff.sh) — see [RUN_SYNDIFF.md](RUN_SYNDIFF.md).
 ```bash
-python prep_benchmark_data.py --split ../synthetic_CECT/benchmark/split.json \
-    --format mat --out SynDiff/data/vindr            # data_{train,val,test}_{NCCT,CECT}.mat
-# train (contrast1=NCCT contrast2=CECT); see SynDiff/README. Inference writes slices
-# (or a .mat) → reassemble with --in_range neg1_1 (SynDiff normalises to [-1,1]).
+SPLIT=../synthetic_CECT/splits/split.json GPU=0 ./run_syndiff.sh all
 ```
-Note SynDiff's `LoadDataSet` transposes and pads to 256 — our 256×256 slices need no
-padding, which is why prep resizes to exactly `--size 256`.
+Three things to know: it JIT-compiles CUDA kernels at import (needs nvcc + ninja +
+pythonX.Y-dev — `setup` preflights this); `--size` must be exactly 256, because
+`LoadDataSet` pads to a hardcoded 256 and any other size shifts the anatomy; and its
+`test.py` cannot be used, so inference runs through [`infer_syndiff.py`](infer_syndiff.py),
+which reuses upstream's own diffusion sampler and only replaces the I/O.
+`LoadDataSet` also transposes every slice (MATLAB column-major convention);
+`infer_syndiff.py` transposes back so reassembly stays aligned.
 
 ### CFPS-Diff (last — roughest, diffusion, multiphase)
 Reads NIfTI natively via `main/Nii_utils.py` / `main/Dataset_gen.py`; point its
@@ -119,7 +122,7 @@ output — keep only the venous volume, then build a manifest by hand or with a 
 wrapper, and score. Consult `CFPS-Diff/Error_troubleshooting.txt` first.
 
 ### Fallback adapter contract (any repo not covered above)
-Read `../synthetic_CECT/benchmark/split.json` → convert → train → infer → export
+Read `../synthetic_CECT/splits/split.json` → convert → train → infer → export
 CECT **NIfTI on the source grid (HU)** + manifest CSV. Reuse
 `../synthetic_CECT/infer_volume.py` stitching for patch/slice outputs.
 

@@ -1,0 +1,34 @@
+# Deps for the SynDiff benchmark path (adapters + the vendored SynDiff/ tree).
+# Install into a DEDICATED env on the GPU server.
+#
+#   python -m venv .venv_syndiff && source .venv_syndiff/bin/activate
+#   pip install -r requirements_syndiff.txt
+#
+# SynDiff has two hard environment requirements the other baselines do not:
+#
+#  1) JIT CUDA extensions. backbones/up_or_down_sampling.py imports utils/op,
+#     which calls torch.utils.cpp_extension.load() AT IMPORT TIME to build
+#     upfirdn2d and fused_act. That needs, outside pip:
+#        - ninja                (in this file)
+#        - nvcc                 (CUDA toolkit, version matching your torch build)
+#        - pythonX.Y-dev        (apt install python3.10-dev, or your version —
+#                                supplies Python.h; pip cannot provide it)
+#     `./run_syndiff.sh setup` preflights all three.
+#
+#  2) A real GPU. train.py initialises torch.distributed with the NCCL backend
+#     even for --num_process_per_node 1, so there is no CPU path.
+#
+# --- deep learning (pick the torch build matching your CUDA) ---
+torch>=1.7.1
+torchvision>=0.8.2
+
+# --- SynDiff runtime ---
+ninja           # required: torch.utils.cpp_extension.load() shells out to it
+h5py            # dataset.py reads the .mat files as HDF5
+
+# --- our NIfTI <-> slice adapters (prep_benchmark_data.py, reassemble_nifti.py,
+#     infer_syndiff.py) ---
+numpy
+nibabel
+Pillow
+scikit-image

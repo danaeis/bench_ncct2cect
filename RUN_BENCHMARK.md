@@ -80,8 +80,11 @@ Reuse `infer_volume.py`'s stitching when a repo outputs slices/patches.
    reads Coltea DICOM, and its `test.py` writes no images. Reuses ResViT's
    *prepped slices*, not its adapter. Driven by `run_cytran.sh` — see
    [RUN_CYTRAN.md](RUN_CYTRAN.md).
-3. **SynDiff** — diffusion; wants **`.mat`** `(#img,W,H)` in [0,1]. Adapter must
-   convert slices to `.mat` and generated slices back to HU NIfTI.
+3. **SynDiff** — diffusion; wants **`.mat`** `(#img,W,H)` in [0,1]. Its own
+   `test.py` is unusable (hardcoded 256x152 IXI crop, per-slice max
+   renormalisation, no case/z in the outputs), so inference goes through
+   `infer_syndiff.py`. Driven by `run_syndiff.sh` — see
+   [RUN_SYNDIFF.md](RUN_SYNDIFF.md).
 4. **CFPS-Diff** — roughest repo; `main/train_CFPS-Diff_gen.py`,
    `main/Inference.py`; multiphase output → export only the venous phase. Do last.
 

@@ -38,7 +38,14 @@
       "Bash(grep -Ev '\\\\.\\(npz|pth|pt|png|jpg|whl|tar\\\\.gz|zip|pyc|nii|nii\\\\.gz|log\\)$')",
       "Bash(grep -E '\\\\.\\(py|sh|md|json|yaml|yml|txt|cfg|toml|ipynb\\)$')",
       "Bash(grep -E '\\\\.\\(py|sh|md|json|yaml|yml|txt\\)$')",
-      "Bash(git ls-remote *)"
+      "Bash(git ls-remote *)",
+      "Bash(bash -n run_syndiff.sh)",
+      "Bash(SIZE=128 ./run_syndiff.sh prep)",
+      "Bash(./run_syndiff.sh setup *)",
+      "Bash(./run_syndiff.sh bogus *)",
+      "Bash(python3 infer_syndiff.py --syndiff SynDiff --input_path /tmp/x --index /tmp/x.csv --exp vindr_syndiff --output_path SynDiff/results --which_epoch 10 --out /tmp/o)",
+      "Bash(python3 -m py_compile infer_syndiff.py)",
+      "Bash(python3 infer_syndiff.py --syndiff SynDiff --input_path /tmp/x --index /tmp/x.csv --exp e --output_path SynDiff/results --which_epoch 10 --out /tmp/o)"
     ],
     "additionalDirectories": [
       "/Users/macbook/develope/thesis/ncct2cect/CyTran/models"
