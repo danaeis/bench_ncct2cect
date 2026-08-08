@@ -50,6 +50,19 @@ Verify by hand with `cd SynDiff && python -c 'from utils.op import upfirdn2d'`.
 The first successful import takes a minute or two while it builds; after that
 it is cached in `~/.cache/torch_extensions`.
 
+**`nvcc` is usually installed but not on `PATH`.** A box that runs torch fine
+often ships only the CUDA *runtime*, with the compiler sitting in
+`/usr/local/cuda*/bin`. `run_syndiff.sh` searches `PATH`, `$CUDA_HOME/bin` and
+`/usr/local/cuda*/bin`, and exports `CUDA_HOME`/`PATH` itself when it finds one.
+If it genuinely is not installed, get a toolkit matching the CUDA your torch was
+built for (the preflight prints both):
+
+```bash
+python -m pip install ninja                 # ninja goes in the active venv
+conda install -c nvidia cuda-nvcc           # no root
+sudo apt install nvidia-cuda-toolkit        # needs root; check the version it gives
+```
+
 ### 2. `SIZE` must be 256
 
 `dataset.py::LoadDataSet` pads every slice to a hardcoded 256×256 with

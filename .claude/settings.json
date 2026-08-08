@@ -45,7 +45,10 @@
       "Bash(./run_syndiff.sh bogus *)",
       "Bash(python3 infer_syndiff.py --syndiff SynDiff --input_path /tmp/x --index /tmp/x.csv --exp vindr_syndiff --output_path SynDiff/results --which_epoch 10 --out /tmp/o)",
       "Bash(python3 -m py_compile infer_syndiff.py)",
-      "Bash(python3 infer_syndiff.py --syndiff SynDiff --input_path /tmp/x --index /tmp/x.csv --exp e --output_path SynDiff/results --which_epoch 10 --out /tmp/o)"
+      "Bash(python3 infer_syndiff.py --syndiff SynDiff --input_path /tmp/x --index /tmp/x.csv --exp e --output_path SynDiff/results --which_epoch 10 --out /tmp/o)",
+      "Bash(pip install *)",
+      "Bash(PYTHON=echo ./run_cytran.sh setup)",
+      "Bash(python3 -c \"import torchvision; print\\('torchvision', torchvision.__version__\\)\")"
     ],
     "additionalDirectories": [
       "/Users/macbook/develope/thesis/ncct2cect/CyTran/models"

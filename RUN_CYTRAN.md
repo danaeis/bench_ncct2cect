@@ -59,11 +59,20 @@ would work with "CyTran's `options/base_options.py` data path". Reading the code
 that is wrong — they share only the pix2pix skeleton. Three things had to be
 built, all of them handled by `setup`:
 
-1. **The repo does not import.** `data/__init__.py` and `models/__init__.py` were
-   carved out of a parent package but kept the absolute prefix
-   (`importlib.import_module("pix2pix.data." + …)`), so `create_dataset()` and
-   `create_model()` raise `ModuleNotFoundError` before anything runs. `setup`
-   sed-patches both to `"data."` / `"models."` (idempotent).
+1. **The repo does not import**, in three separate places, all left by the same
+   carve-out from a parent `pix2pix` package. `setup` sed-patches all three,
+   idempotently:
+   - `data/__init__.py` and `models/__init__.py` kept the absolute prefix
+     (`importlib.import_module("pix2pix.data." + …)`), so `create_dataset()` and
+     `create_model()` raise `ModuleNotFoundError` before anything runs → patched
+     to `"data."` / `"models."`.
+   - `models/cytran_model.py` and `models/cycle_gan_model.py` do
+     `from util import ImagePool`, but `ImagePool` lives in `util/image_pool.py`
+     and `util/__init__.py` is a bare docstring that re-exports nothing. That
+     import only ever resolved as `pix2pix.util`'s `__init__` → patched to
+     `from util.image_pool import ImagePool`. This one fires *after* option
+     parsing, so it surfaces as a traceback the moment `train.py` looks up the
+     model class.
 2. **The stock loader reads Coltea DICOM.** `data/ct_dataset.py` unpickles a dict
    of DICOM paths from the Coltea-Lung-CT-100W release and rescales raw stored
    values with `x/1e3 - 1`. We supply [`cytran_vindr_dataset.py`](cytran_vindr_dataset.py),
@@ -89,7 +98,7 @@ neither, so they are left alone.
 
 | stage | action |
 |---|---|
-| `setup` | verifies the vendored `CyTran/` tree, patches the two broken import prefixes, installs `data/vindr_dataset.py` |
+| `setup` | verifies the vendored `CyTran/` tree, patches the three broken imports left by the `pix2pix` carve-out, installs `data/vindr_dataset.py` |
 | `prep` | our NIfTI → pix2pix AB-PNG slices via `prep_benchmark_data.py` (identical to ResViT's prep) |
 | `train` | CyTran, `--direction AtoB` so `G_A` is NCCT→CECT |
 | `infer` | `G_A` over the test slices → `<case>_<zzzz>_fake_B.npy` |

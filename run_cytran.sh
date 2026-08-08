@@ -112,6 +112,16 @@ do_setup() {
     sed_inplace 's#"pix2pix\.models\." + model_name#"models." + model_name#' "$CYTRAN/models/__init__.py"
     echo "  patched models/__init__.py import prefix"
   fi
+  # Same carve-out damage, third form: ImagePool lives in util/image_pool.py and
+  # util/__init__.py is a bare docstring that re-exports nothing, so
+  # `from util import ImagePool` only ever worked as `pix2pix.util`'s __init__.
+  local f
+  for f in "$CYTRAN/models/cytran_model.py" "$CYTRAN/models/cycle_gan_model.py"; do
+    if [ -f "$f" ] && grep -q '^from util import ImagePool' "$f"; then
+      sed_inplace 's#^from util import ImagePool#from util.image_pool import ImagePool#' "$f"
+      echo "  patched $(basename "$f") ImagePool import"
+    fi
+  done
   # Our loader. cytran_vindr_dataset.py at the repo root stays the source of
   # truth; setup copies it into place so the path matches CyTran's loader lookup.
   cp "$HERE/cytran_vindr_dataset.py" "$CYTRAN/data/vindr_dataset.py"

@@ -100,6 +100,35 @@ resolve_split() {
   exit 1
 }
 
+# torch.utils.cpp_extension needs nvcc on PATH and CUDA_HOME set. A box that runs
+# torch fine often has only the CUDA *runtime* on PATH while the compiler sits in
+# /usr/local/cuda*/bin, so look there before giving up. Exports CUDA_HOME/PATH for
+# the stages that import the backbones.
+resolve_cuda() {
+  if command -v nvcc >/dev/null 2>&1; then
+    CUDA_HOME="${CUDA_HOME:-$(dirname "$(dirname "$(command -v nvcc)")")}"
+    export CUDA_HOME
+    return 0
+  fi
+  local c
+  for c in "${CUDA_HOME:-}/bin/nvcc" /usr/local/cuda/bin/nvcc /usr/local/cuda-*/bin/nvcc; do
+    if [ -x "$c" ]; then
+      CUDA_HOME="$(dirname "$(dirname "$c")")"
+      export CUDA_HOME
+      export PATH="$CUDA_HOME/bin:$PATH"
+      echo "  found nvcc off-PATH: $c  (exported CUDA_HOME=$CUDA_HOME)"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# What CUDA did torch build against? The JIT extension must compile with a
+# matching nvcc, so surface both numbers when they might disagree.
+torch_cuda_version() {
+  "$PY" -c 'import torch; print(torch.version.cuda or "cpu-only build")' 2>/dev/null || echo '?'
+}
+
 # Newest gen_diffusive_2_<epoch>.pth, or empty if none exist.
 latest_ckpt_epoch() {
   ls "$OUTPUT_PATH/$NAME"/gen_diffusive_2_*.pth 2>/dev/null \
@@ -118,8 +147,22 @@ do_setup() {
   # torch.utils.cpp_extension.load() at import time. Without ninja/nvcc/headers
   # that blows up inside the first epoch; catch it now.
   local miss=0
-  command -v ninja >/dev/null 2>&1 || { echo "  MISSING: ninja        (pip install ninja)"; miss=1; }
-  command -v nvcc  >/dev/null 2>&1 || { echo "  MISSING: nvcc         (CUDA toolkit; must match torch's CUDA)"; miss=1; }
+  # ninja must be importable by THIS python, not just any ninja on PATH: torch
+  # calls it as a subprocess but pip installs it into the active env's bin.
+  if "$PY" -c 'import ninja' >/dev/null 2>&1 || command -v ninja >/dev/null 2>&1; then
+    echo "  ok: ninja"
+  else
+    echo "  MISSING: ninja        ($PY -m pip install ninja)"; miss=1
+  fi
+  if resolve_cuda; then
+    echo "  ok: nvcc $(nvcc --version 2>/dev/null | sed -n 's/.*release \([0-9.]*\).*/\1/p') | torch built for CUDA $(torch_cuda_version)"
+  else
+    echo "  MISSING: nvcc         (CUDA toolkit; searched PATH, \$CUDA_HOME/bin, /usr/local/cuda*/bin)"
+    echo "                        torch here is built for CUDA $(torch_cuda_version) — install a matching toolkit:"
+    echo "                          conda install -c nvidia cuda-nvcc     (no root needed)"
+    echo "                          apt install nvidia-cuda-toolkit       (needs root; check the version it gives)"
+    miss=1
+  fi
   "$PY" - <<'EOF' || miss=1
 import sys, sysconfig, os
 inc = sysconfig.get_paths()["include"]
@@ -154,6 +197,7 @@ do_train() {
       echo "ERROR: missing $DATAROOT/data_${p}_${CONTRAST1}.mat (run prep first)" >&2; exit 1; }
   done
   require_size_256
+  resolve_cuda || { echo "ERROR: nvcc not found; run \`$0 setup\` for details" >&2; exit 1; }
   log train "SynDiff $CONTRAST1 -> $CONTRAST2 ($NUM_EPOCH epochs, ckpt every $SAVE_CKPT_EVERY)"
   cd "$SYNDIFF"
   # --num_process_per_node 1 still goes through NCCL; --local_rank 0 picks the
@@ -180,6 +224,7 @@ do_infer() {
     echo "  train first; train.py only writes checkpoints every SAVE_CKPT_EVERY=$SAVE_CKPT_EVERY epochs." >&2
     exit 1
   fi
+  resolve_cuda || { echo "ERROR: nvcc not found; run \`$0 setup\` for details" >&2; exit 1; }
   log infer "gen_diffusive_2 @ epoch $epoch -> *_fake_B.npy"
   CUDA_VISIBLE_DEVICES="$GPU" "$PY" "$HERE/infer_syndiff.py" \
       --syndiff "$SYNDIFF" --input_path "$DATAROOT" \
