@@ -48,7 +48,8 @@
       "Bash(python3 infer_syndiff.py --syndiff SynDiff --input_path /tmp/x --index /tmp/x.csv --exp e --output_path SynDiff/results --which_epoch 10 --out /tmp/o)",
       "Bash(pip install *)",
       "Bash(PYTHON=echo ./run_cytran.sh setup)",
-      "Bash(python3 -c \"import torchvision; print\\('torchvision', torchvision.__version__\\)\")"
+      "Bash(python3 -c \"import torchvision; print\\('torchvision', torchvision.__version__\\)\")",
+      "Bash(PYTHON=echo SAVE_EPOCH_FREQ=1 NITER=1 NITER_DECAY=0 ./run_resvit.sh pretrain)"
     ],
     "additionalDirectories": [
       "/Users/macbook/develope/thesis/ncct2cect/CyTran/models"

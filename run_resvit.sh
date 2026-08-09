@@ -39,6 +39,11 @@ PRE_NAME="${PRE_NAME:-vindr_resvit_pretrain}"                   # pretrain exp n
 NITER="${NITER:-25}"            # epochs at full lr  (pretrain uses 2x these)
 NITER_DECAY="${NITER_DECAY:-25}" # epochs of lr decay
 BATCH="${BATCH:-1}"
+# train.py only writes a numbered checkpoint AND a validation line on epochs
+# divisible by this (train.py:92). A run shorter than one interval therefore ends
+# with no numbered checkpoint and an empty log.txt — set SAVE_EPOCH_FREQ=1 for
+# smoke tests so you can tell a short run from a crashed one.
+SAVE_EPOCH_FREQ="${SAVE_EPOCH_FREQ:-5}"
 OUT_NIFTI="${OUT_NIFTI:-$RESVIT/results/vindr_nifti}"
 
 VIT_DIR="$RESVIT/model/vit_checkpoint/imagenet21k"
@@ -148,7 +153,7 @@ do_pretrain() {
       --model resvit_one --which_model_netG res_cnn --which_direction AtoB \
       --lambda_A 100 --dataset_mode aligned --norm batch --pool_size 0 \
       --input_nc 1 --output_nc 1 --loadSize "$SIZE" --fineSize "$SIZE" \
-      --niter $((NITER*2)) --niter_decay $((NITER_DECAY*2)) --save_epoch_freq 5 \
+      --niter $((NITER*2)) --niter_decay $((NITER_DECAY*2)) --save_epoch_freq "$SAVE_EPOCH_FREQ" \
       --checkpoints_dir checkpoints/ --display_id 0 --lr 0.0002 --batchSize "$BATCH"
 }
 
@@ -162,7 +167,7 @@ do_finetune() {
       --model resvit_one --which_model_netG resvit --which_direction AtoB \
       --lambda_A 100 --dataset_mode aligned --norm batch --pool_size 0 \
       --input_nc 1 --output_nc 1 --loadSize "$SIZE" --fineSize "$SIZE" \
-      --niter "$NITER" --niter_decay "$NITER_DECAY" --save_epoch_freq 5 \
+      --niter "$NITER" --niter_decay "$NITER_DECAY" --save_epoch_freq "$SAVE_EPOCH_FREQ" \
       --checkpoints_dir checkpoints/ --display_id 0 \
       --pre_trained_transformer 1 --pre_trained_resnet 1 \
       --pre_trained_path "checkpoints/$PRE_NAME/latest_net_G.pth" \
