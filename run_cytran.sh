@@ -34,6 +34,9 @@ CYTRAN="$HERE/CyTran"
 SPLIT="${SPLIT:-}"                                              # shared case split
 DATAROOT="${DATAROOT:-$CYTRAN/datasets/vindr}"                  # prepped slices
 SIZE="${SIZE:-256}"             # must be divisible by 2^N_DOWNSAMPLING
+# Drop train/val slices with < this fraction of >0.1 voxels (0 = keep every
+# slice, the default). Test is never filtered, so reconstruction stays complete.
+MIN_TISSUE_FRAC="${MIN_TISSUE_FRAC:-0.0}"
 GPU="${GPU:-0}"                 # gpu id; -1 = cpu
 NAME="${NAME:-vindr_cytran}"
 NITER="${NITER:-25}"            # epochs at full lr      (--n_epochs)
@@ -135,7 +138,8 @@ do_prep() {
   log prep "our NIfTI -> pix2pix AB-PNG slices at $DATAROOT"
   resolve_split
   "$PY" "$HERE/prep_benchmark_data.py" --split "$SPLIT" \
-      --format pix2pix --out "$DATAROOT" --size "$SIZE"
+      --format pix2pix --out "$DATAROOT" --size "$SIZE" \
+      --min_tissue_frac "$MIN_TISSUE_FRAC"
 }
 
 do_train() {

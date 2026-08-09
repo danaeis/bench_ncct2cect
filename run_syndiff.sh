@@ -37,6 +37,9 @@ SYNDIFF="$HERE/SynDiff"
 SPLIT="${SPLIT:-}"                                              # shared case split
 DATAROOT="${DATAROOT:-$SYNDIFF/datasets/vindr}"                 # prepped .mat
 SIZE="${SIZE:-256}"             # SynDiff pads/assumes 256; do not change lightly
+# Drop train/val slices with < this fraction of >0.1 voxels (0 = keep every
+# slice, the default). Test is never filtered, so reconstruction stays complete.
+MIN_TISSUE_FRAC="${MIN_TISSUE_FRAC:-0.0}"
 GPU="${GPU:-0}"                 # gpu id; CPU is not supported (NCCL + JIT CUDA)
 NAME="${NAME:-vindr_syndiff}"   # --exp
 OUTPUT_PATH="${OUTPUT_PATH:-$SYNDIFF/results}"                  # holds <NAME>/
@@ -188,7 +191,8 @@ do_prep() {
   require_size_256
   resolve_split
   "$PY" "$HERE/prep_benchmark_data.py" --split "$SPLIT" \
-      --format mat --out "$DATAROOT" --size "$SIZE"
+      --format mat --out "$DATAROOT" --size "$SIZE" \
+      --min_tissue_frac "$MIN_TISSUE_FRAC"
 }
 
 do_train() {
