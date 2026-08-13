@@ -23,20 +23,27 @@ same-data comparison, not a reproduction.
 
 ### Pre-existing (GAN / CNN family)
 - `Ea-GANs/` — edge-aware GAN (cross-modality synthesis).
-- `UnpairedImageTranslation/` — CycleGAN-family unpaired translation.
 - `VCE_CESM/` — virtual contrast enhancement.
 - `pix2pix3D-CT/` — 3D pix2pix for CT.
 - ⚠️ `Ea_GANs/` — appears to be a broken nested clone (contains only
   `Ea_GANs/Ea_GANs`); `Ea-GANs/` (hyphen) is the real one. Recommend removing.
+- ⚠️ `UnpairedImageTranslation/` — **superseded, do not use.** It is Kaji's
+  **Chainer** reimplementation of CycleGAN; Chainer has been unmaintained since
+  2019 and it would need a CUDA-10.2 `cupy` wheel (both sit unused in
+  `vindr_ds/`). `CycleGAN/` below is the PyTorch original and covers the same
+  model on a maintained stack.
 
 ### Added for SOTA + diffusion coverage (vendored into this repo)
 
 | dir | model | type | paper | entrypoints | input format |
 |---|---|---|---|---|---|
 | `SynDiff/` | SynDiff | adversarial **diffusion** | TMI'23, [icon-lab](https://github.com/icon-lab/SynDiff) | `train.py`, `test.py` | `.mat`, `(#img,W,H)`, values 0–1 |
-| `CFPS-Diff/` | CFPS-Diff | conditional **diffusion** (NCCT→multiphase CECT) | MICCAI'25, [Kindyz](https://github.com/Kindyz/CFPS-Diff) | `main/train_CFPS-Diff_gen.py`, `main/Inference.py` | see `main/`; ships `Error_troubleshooting.txt` |
+| `CFPS-Diff/` | CFPS-Diff | conditional **diffusion** (paper: NCCT→multiphase CECT) | MICCAI'25, [Kindyz](https://github.com/Kindyz/CFPS-Diff) | `main/train_CBSI_gen.py`, `main/Inference_CBSI.py` | brain-MR NIfTI dirs (`T1/T2F/T1C/ROI/Brain_mask.nii.gz`) — ⚠️ not CT, see below |
 | `ResViT/` | ResViT | transformer-GAN | TMI'22, [icon-lab](https://github.com/icon-lab/ResViT) | `train.py`, `test.py` | pix2pix-style aligned pairs |
 | `CyTran/` | CyTran | cycle **transformer** | Neurocomputing'23, [ristea](https://github.com/ristea/cycle-transformer) | `train.py`, `test.py`, `options/base_options.py` (data path) | CycleGAN/pix2pix-style; ships Coltea-Lung-CT-100W |
+| `CycleGAN/` | CycleGAN | **unpaired** GAN | ICCV'17, [junyanz](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix) | `train.py`, `test.py` | two dirs per phase (`trainA`/`trainB`) |
+| `TransUNet/` | TransUNet | hybrid R50+ViT **U-Net** | arXiv'21, [Beckschen](https://github.com/Beckschen/TransUNet) | *architecture only* — see below | pix2pix AB-PNG (via our trainer) |
+| — (`monai`) | SwinUNETR | Swin-transformer **U-Net** | CVPR'22 / MICCAI'21, [MONAI](https://github.com/Project-MONAI/research-contributions) | *architecture only* — see below | pix2pix AB-PNG (via our trainer) |
 
 Notes:
 - **ResViT and CyTran share the pix2pix/CycleGAN codebase** (options/, aligned-pair
@@ -44,8 +51,26 @@ Notes:
   with CycleGAN-and-pix2pix".
 - **SynDiff wants `.mat`** inputs (`(#images, W, H)`, [0,1]) — its adapter must
   convert NCCT/CECT slices to `.mat` and convert generated slices back to HU NIfTI.
-- **CFPS-Diff** is the roughest repo (Python 3.8, torch 2.0+cu118, troubleshooting
-  file). Do it last. It targets multiphase output — we score only the venous phase.
+- **CycleGAN is the unpaired control.** Our slices are paired on disk, but
+  `--dataset_mode unaligned` draws A and B independently, so it is trained purely
+  by cycle-consistency. That is deliberate: it measures what the unpaired
+  objective costs on data where pairing *is* available. Switching it to aligned
+  mode would just make it pix2pix, which ResViT already covers.
+- ⚠️ **SwinUNETR and TransUNet are architectures, not pipelines.** Both ship a
+  *segmentation* trainer (Dice/CE on BTCV/Synapse/BraTS) with no synthesis path,
+  so unlike every other entry there is no upstream `train.py` to point at
+  NCCT→CECT. We keep their networks byte-for-byte and supply the training loop
+  ourselves — `backbone_common.py` / `train_backbone.py` / `infer_backbone.py` —
+  using **ResViT's exact objective** (conditional PatchGAN + 100·L1, LSGAN,
+  Adam 2e-4/β₁=0.5, flat-then-linear-decay lr) so the comparison isolates
+  architecture rather than optimisation. `LAMBDA_ADV=0` gives the pure-L1
+  ablation those two papers actually use. They read ResViT's existing pix2pix
+  slices, so there is no third data format and no second copy on disk.
+- ⚠️ **CFPS-Diff's published code does not implement the paper it advertises.** The
+  README describes NCCT→multiphase CECT, but every uploaded script is a *brain-MRI*
+  contrast-enhancement model (BraTS): T1 + T2-FLAIR → T1Gd, plus an enhancing-tumor
+  classifier. Verified against upstream HEAD `674c96a` — our vendored copy is
+  byte-identical, so this is upstream's state, not a bad clone. Details below.
 - Deps per repo stay inside each subdir; do not merge into a global env (SynDiff
   torch>=1.7 vs CFPS-Diff torch==2.0 conflict).
 
@@ -102,6 +127,32 @@ the identical layout. Train per CyTran/README pointing `--dataroot` at
 `CyTran/datasets/vindr` (or reuse ResViT's output dir), then reassemble the same way
 (check its generated-slice suffix).
 
+### CycleGAN
+Fully driven by [`run_cyclegan.sh`](run_cyclegan.sh) — see [RUN_CYCLEGAN.md](RUN_CYCLEGAN.md).
+```bash
+SPLIT=../synthetic_CECT/splits/split.json GPU=0 ./run_cyclegan.sh all
+```
+Needs its own prep layout (`--format cyclegan` → `{train,val,test}{A,B}/`). Three
+things to know: this HEAD has **no `--gpu_ids`** (device comes from
+`CUDA_VISIBLE_DEVICES` via `util.init_ddp()`); `--num_test` defaults to 50 and
+would truncate the test set; and inference runs `--model test --model_suffix _A`,
+whose visual is named `fake`, so reassembly matches `_fake` — **not** `_fake_B`.
+
+### SwinUNETR and TransUNet
+Fully driven by [`run_swinunetr.sh`](run_swinunetr.sh) / [`run_transunet.sh`](run_transunet.sh),
+thin wrappers over the shared [`run_backbone.sh`](run_backbone.sh) — see
+[RUN_BACKBONES.md](RUN_BACKBONES.md).
+```bash
+SPLIT=../synthetic_CECT/splits/split.json GPU=0 ./run_swinunetr.sh all
+SPLIT=../synthetic_CECT/splits/split.json GPU=1 ./run_transunet.sh all
+```
+`DATAROOT` defaults to ResViT's prepped slices and `prep` is a no-op when they
+already exist. Two asymmetries to report with the numbers: TransUNet is
+initialised from the **same** `R50+ViT-B_16.npz` ResViT downloads (`VIT_INIT=0`
+to disable), while **SwinUNETR trains from scratch** — MONAI's self-supervised
+SwinViT weights are 3-D only and cannot load into the `spatial_dims=2` model we
+run to keep it comparable with the rest of the 2-D benchmark.
+
 ### SynDiff
 Fully driven by [`run_syndiff.sh`](run_syndiff.sh) — see [RUN_SYNDIFF.md](RUN_SYNDIFF.md).
 ```bash
@@ -115,11 +166,32 @@ which reuses upstream's own diffusion sampler and only replaces the I/O.
 `LoadDataSet` also transposes every slice (MATLAB column-major convention);
 `infer_syndiff.py` transposes back so reassembly stays aligned.
 
-### CFPS-Diff (last — roughest, diffusion, multiphase)
-Reads NIfTI natively via `main/Nii_utils.py` / `main/Dataset_gen.py`; point its
-dataset config at our volumes directly (no prep tool needed). It emits multiphase
-output — keep only the venous volume, then build a manifest by hand or with a thin
-wrapper, and score. Consult `CFPS-Diff/Error_troubleshooting.txt` first.
+### CFPS-Diff (blocked — published code is the wrong modality)
+Do **not** budget this as an adapter job. The repo is vendored and current with
+upstream, but the code is a brain-MRI model, not a CT one:
+
+- `main/Dataset_gen.py` walks `ET-1/` and `ET-0/` class dirs and loads
+  `T1.nii.gz`, `T2F.nii.gz`, `T1C.nii.gz`, `ROI.nii.gz`, `Brain_mask.nii.gz`
+  per case — no NCCT/CECT path anywhere.
+- `main/train_CBSI_gen.py` — `--cc 2` is documented as "condition_channels:
+  non-contrast MR (T1 and T2-FLAIR)", `--class_cond 2` is "ET label types
+  (enhancing and non-enhancing)", `--output_nc 1` is "output T1Gd image".
+  The training loop comments `x` as T1Gd and `x_cond` as T1+T2-FLAIR.
+- `main/Inference_CBSI.py` hardcodes `./glioma_data/MICCAI_2023/BraTS-GLI/` and
+  `BraTS-Africa/`, and classifies enhancement rather than emitting phases.
+- Intensities are MR-harmonized to `--MR_min 0 / --MR_max 255`, `--ImageSize 424`;
+  there is no HU windowing.
+- The only CT trace in the whole repo is one stale docstring
+  (`main/Networks_DDPM_trainer.py:382`, "Conditional input (e.g., NCCT)").
+- README-referenced files that don't exist upstream: `main/train_CFPS-Diff_gen.py`,
+  `main/Inference.py`, `Error_troubleshooting.txt`.
+
+The diffusion backbone (`Networks_UNet_DDPM.py`, `Networks_DDPM_trainer.py`,
+`Networks_model_diffusion.py`) is generic and reusable, so a port is *possible*:
+2-ch MR condition → 1-ch NCCT, `class_cond` ET labels → phase labels, drop the
+segmentation aux loss (no CT analog for ROI/Brain_mask), swap harmonization for
+HU windowing. That is a reimplementation, not an adapter — scope it deliberately
+or move CFPS-Diff to the watch-list until the authors upload the CT code.
 
 ### Fallback adapter contract (any repo not covered above)
 Read `../synthetic_CECT/splits/split.json` → convert → train → infer → export

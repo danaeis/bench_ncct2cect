@@ -1,0 +1,24 @@
+# Deps for run_cyclegan.sh (junyanz/pytorch-CycleGAN-and-pix2pix).
+# Keep in a dedicated env — do not merge with the ResViT / CyTran / SynDiff ones.
+#
+#   python -m venv .venv_cyclegan && source .venv_cyclegan/bin/activate
+#   pip install -r requirements_cyclegan.txt
+#
+# Install the torch/torchvision build matching the server's CUDA first, e.g.
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+torch>=1.13
+torchvision>=0.14
+numpy>=1.21
+Pillow>=9.0
+
+# util/html.py builds the results gallery; imported unconditionally by
+# util/visualizer.py, so it is required even with --no_html.
+dominate>=2.8.0
+
+# our prep/reassemble tools
+nibabel>=4.0
+
+# NOT required: wandb. util/visualizer.py imports it at module scope upstream,
+# but run_cyclegan.sh's `apply_shims` makes that import conditional on
+# --use_wandb, which this pipeline never passes. Install it only if you want
+# wandb logging.

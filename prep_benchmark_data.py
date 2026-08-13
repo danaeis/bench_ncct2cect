@@ -9,6 +9,15 @@ phase (train/val/test), 2-D axial slices in one of two layouts:
   --format pix2pix   → <out>/<phase>/<case>_<z>.png, side-by-side [A|B] where
                        A = NCCT, B = CECT. This is the classic pix2pix aligned
                        format that ResViT and CyTran both read (data/aligned_dataset.py).
+                       SwinUNETR and TransUNet read this same layout through
+                       backbone_common.py, so they need no format of their own.
+  --format cyclegan  → <out>/<phase>A/<case>_<z>.png (NCCT) and
+                       <out>/<phase>B/<case>_<z>.png (CECT), i.e. the two domains
+                       in separate directories. This is what CycleGAN's
+                       data/unaligned_dataset.py expects (dir_A = phase+"A").
+                       The slices are still perfectly paired on disk — CycleGAN
+                       simply ignores the pairing and samples B at random, which
+                       is exactly the unpaired baseline we want to measure.
   --format mat       → <out>/data_<phase>_NCCT.mat and data_<phase>_CECT.mat,
                        HDF5 with variable `data_fs`, shape (N, size, size) in
                        [0,1] — the layout SynDiff's LoadDataSet expects.
@@ -63,7 +72,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--split', type=Path, required=True)
-    ap.add_argument('--format', choices=['pix2pix', 'mat'], required=True)
+    ap.add_argument('--format', choices=['pix2pix', 'cyclegan', 'mat'], required=True)
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--size', type=int, default=256)
     ap.add_argument('--slice_axis', type=int, default=2, help='axial axis (default 2)')
@@ -84,6 +93,9 @@ def main():
         cases = split.get(phase, [])
         if args.format == 'pix2pix':
             (args.out / phase).mkdir(parents=True, exist_ok=True)
+        elif args.format == 'cyclegan':
+            (args.out / f'{phase}A').mkdir(parents=True, exist_ok=True)
+            (args.out / f'{phase}B').mkdir(parents=True, exist_ok=True)
         print(f'[{phase}] {len(cases)} cases')
         keep_all = phase == 'test'          # test volumes must reconstruct fully
 
@@ -117,6 +129,15 @@ def main():
                     fn = args.out / phase / f'{cid}_{z:04d}.png'
                     Image.fromarray((ab * 255).astype(np.uint8), mode='L').save(fn)
                     out_ref = str(fn)
+                elif args.format == 'cyclegan':
+                    # Same slices, two dirs. out_ref points at the A-side file,
+                    # because CycleGAN names its generated slices after the A
+                    # input it was fed.
+                    fa = args.out / f'{phase}A' / f'{cid}_{z:04d}.png'
+                    fb = args.out / f'{phase}B' / f'{cid}_{z:04d}.png'
+                    Image.fromarray((a_r * 255).astype(np.uint8), mode='L').save(fa)
+                    Image.fromarray((b_r * 255).astype(np.uint8), mode='L').save(fb)
+                    out_ref = str(fa)
                 else:
                     mat_buffers.setdefault((phase, 'NCCT'), []).append(a_r)
                     mat_buffers.setdefault((phase, 'CECT'), []).append(b_r)
@@ -144,7 +165,7 @@ def main():
         w.writeheader(); w.writerows(index_rows)
     print(f'[written] {len(index_rows)} slices, index → {idx}')
     print(f'NCCT=A (input), CECT=B (target). Train {args.format} '
-          f"({'AtoB' if args.format=='pix2pix' else 'NCCT→CECT'}).")
+          f"({'AtoB' if args.format in ('pix2pix', 'cyclegan') else 'NCCT→CECT'}).")
 
 
 if __name__ == '__main__':

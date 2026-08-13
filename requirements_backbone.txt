@@ -1,0 +1,23 @@
+# Deps for the two segmentation backbones we repurpose as generators:
+# SwinUNETR (run_swinunetr.sh) and TransUNet (run_transunet.sh).
+# They share backbone_common.py / train_backbone.py / infer_backbone.py, so one
+# env covers both. Keep it separate from the ResViT / CyTran / SynDiff envs.
+#
+#   python -m venv .venv_backbone && source .venv_backbone/bin/activate
+#   pip install -r requirements_backbone.txt
+#
+# Install the torch build that matches the server's CUDA first, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=1.13
+numpy>=1.21
+Pillow>=9.0
+nibabel>=4.0
+
+# SwinUNETR: the network itself. MONAI 1.3-1.6 all work — backbone_common.py
+# handles the img_size signature change across those versions.
+monai>=1.3
+
+# TransUNet: its configs are ml_collections.ConfigDict, and load_from() resizes
+# the ImageNet position embeddings with scipy.ndimage.zoom.
+ml-collections>=0.1.1
+scipy>=1.7
