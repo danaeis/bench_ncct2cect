@@ -200,11 +200,36 @@ CECT **NIfTI on the source grid (HU)** + manifest CSV. Reuse
 
 ## Scoring (after any model produces a manifest)
 
+Results **accumulate**: each model's per-case rows are cached under
+`<out>/store/`, so score a model once, when it finishes, and it stays in every
+table printed afterwards. Every cross-model quantity (best/second marks, paired
+t-tests, level-recovery regressions) is recomputed from the merged rows on each
+run, so the 6th model retroactively updates the table for the first 5.
+
 ```bash
 cd ../synthetic_CECT
-python benchmark.py --weights orgFeatXGB_CTPhase/xgb_vindr_full.pkl \
-    --manifest ours=../out_synthesis_train/literature_baseline_l1_organ_curriculum/phase_infer/manifest.csv \
-    --manifest resvit=../ncct2cect/ResViT/<out>/manifest.csv \
-    --baseline ours --out analysis/benchmark
-# → analysis/benchmark/master_table.md
+W=orgFeatXGB_CTPhase/xgb_vindr_full.pkl
+OUT=analysis/benchmark
+
+# as each model finishes — one invocation per model, nothing is re-scored
+python benchmark.py --weights $W --out $OUT --perceptual --baseline ours \
+    --manifest ours=../out_synthesis_train/literature_baseline_l1_organ_curriculum/phase_infer/manifest.csv
+python benchmark.py --weights $W --out $OUT --perceptual --baseline ours \
+    --manifest resvit=../ncct2cect/ResViT/results/vindr_nifti/manifest.csv
+python benchmark.py --weights $W --out $OUT --perceptual --baseline ours \
+    --manifest syndiff=../ncct2cect/SynDiff/results/vindr_nifti/manifest.csv
+# → analysis/benchmark/master_table.md, with every model scored so far
+
+python benchmark.py --weights $W --out $OUT --list_store   # what is cached
+python benchmark.py --weights $W --out $OUT --drop resvit  # retire a superseded run
 ```
+
+Pass `--perceptual` on the run that scores each model (it needs `lpips` +
+`pytorch-fid`): LPIPS and FID are cached with that model's rows, so the
+perceptual tables render on later runs whether or not those runs use the flag.
+FID is per-model distributional and is computed against the real slices of that
+model's own cases, which is what makes caching it valid.
+
+Entries scored under a different HU window, `--gen_not_hu`, or a different phase
+classifier are **excluded and reported**, never pooled — those columns would not
+be the same quantity. Re-score them, or use a separate `--out`.

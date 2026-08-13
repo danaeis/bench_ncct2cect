@@ -44,8 +44,23 @@ GPU="${GPU:-0}"                 # gpu id; CPU is not supported (NCCL + JIT CUDA)
 NAME="${NAME:-vindr_syndiff}"   # --exp
 OUTPUT_PATH="${OUTPUT_PATH:-$SYNDIFF/results}"                  # holds <NAME>/
 NUM_EPOCH="${NUM_EPOCH:-50}"
+# BATCH=1 is what the SynDiff paper used at 256x256 and is the safe default. Two
+# NCSN++ UNets + two ResNet translators + four discriminators are resident at
+# once, so VRAM is the constraint; if it fits, BATCH=4 is roughly 2-3x the
+# throughput per slice. Raise it until the run OOMs, then step back one.
 BATCH="${BATCH:-1}"
 SAVE_CKPT_EVERY="${SAVE_CKPT_EVERY:-10}"   # infer can only load a saved epoch
+# content.pth is the resume point. Upstream's default of 10 means a crash at
+# epoch 9 throws away 9 epochs; this run is far too expensive for that.
+SAVE_CONTENT_EVERY="${SAVE_CONTENT_EVERY:-1}"
+RESUME="${RESUME:-1}"                      # 1 = continue from content.pth if present
+# The dataset is fully in RAM (dataset.py reads the whole .mat up front), so
+# worker processes only add one IPC round-trip per sample. 0 = load in-process.
+NUM_WORKERS="${NUM_WORKERS:-0}"
+# Validation samples the full diffusion chain over every val slice, in BOTH
+# directions, one slice at a time. Match it to the checkpoint cadence rather than
+# paying it every epoch; the last epoch is always validated regardless.
+VAL_EVERY="${VAL_EVERY:-10}"
 CKPT_EPOCH="${CKPT_EPOCH:-}"               # default: newest saved epoch
 PORT="${PORT:-6036}"                       # DDP MASTER_PORT
 OUT_NIFTI="${OUT_NIFTI:-$SYNDIFF/results/vindr_nifti}"
@@ -204,9 +219,17 @@ do_train() {
   resolve_cuda || { echo "ERROR: nvcc not found; run \`$0 setup\` for details" >&2; exit 1; }
   log train "SynDiff $CONTRAST1 -> $CONTRAST2 ($NUM_EPOCH epochs, ckpt every $SAVE_CKPT_EVERY)"
   cd "$SYNDIFF"
+  # train.py starts from epoch 0 unless --resume is passed, so without this an
+  # interrupted run silently restarts from scratch every relaunch — the failure
+  # mode that looks like "still in epoch 0 after four days".
+  local resume_flag=()
+  [ "$RESUME" = "1" ] && resume_flag=(--resume)
   # --num_process_per_node 1 still goes through NCCL; --local_rank 0 picks the
   # device, so CUDA_VISIBLE_DEVICES is how we select which physical GPU.
   CUDA_VISIBLE_DEVICES="$GPU" "$PY" train.py \
+      "${resume_flag[@]}" \
+      --num_workers "$NUM_WORKERS" --val_every "$VAL_EVERY" \
+      --save_content_every "$SAVE_CONTENT_EVERY" \
       --image_size "$SIZE" --exp "$NAME" \
       --num_channels "$NUM_CHANNELS" --num_channels_dae "$NUM_CHANNELS_DAE" \
       --ch_mult $CH_MULT --num_timesteps "$NUM_TIMESTEPS" \

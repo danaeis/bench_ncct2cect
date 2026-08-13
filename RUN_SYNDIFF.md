@@ -108,9 +108,46 @@ diffusion math cannot drift, and only replaces the I/O around them.
   rescaling, so reassembly uses `--in_range neg1_1`.
 - **DDP port.** `train.py` needs a free `MASTER_PORT`; override with `PORT=6037`
   if you run two experiments on one box.
-- **Resuming.** `--save_content` is on, so `results/<NAME>/content.pth` lets an
-  interrupted run pick up where it stopped — unlike the ResViT test stage, which
-  restarts from slice 0.
+- **Resuming.** On by default (`RESUME=1`), writing `results/<NAME>/content.pth`
+  after every epoch (`SAVE_CONTENT_EVERY=1`). Set `RESUME=0` to force a fresh
+  start. Upstream's `train.py` ignores `content.pth` unless `--resume` is passed
+  and starts from epoch 0 otherwise, so before this was wired up a crash-relaunch
+  loop would sit in "epoch 0" indefinitely while looking like a running job.
+
+## Throughput — what this costs and why
+
+SynDiff is by a wide margin the most expensive model in this benchmark, and the
+reason is architectural rather than "diffusion is slow". With `NUM_TIMESTEPS=4`
+training samples ONE random timestep per iteration; the chain is never unrolled
+except at inference. The cost is that **eight networks** are trained at once —
+two NCSN++ diffusive generators, two ResNet CycleGAN translators, two
+time-conditioned discriminators and two cycle discriminators — in both
+directions simultaneously. One iteration consumes a single 256×256 slice through
+roughly 4 NCSN++ forwards, 8 translator forwards, 12 discriminator forwards and
+3 backward passes, plus an R1 double-backward every `--lazy_reg` steps. ResViT or
+CyTran spends one generator forward and one discriminator forward on the same
+slice.
+
+The training loop as vendored also carried several avoidable costs, all fixed in
+this tree (see the `SPEED:` comments in `SynDiff/train.py`):
+
+| what | why it cost | fix |
+|---|---|---|
+| `torch.autograd.set_detect_anomaly(True)` in the hot loop | global, sticky, never disabled → per-node stack traces + NaN checks on *every* backward for the whole run, ~2-4x | removed; opt in with `--detect_anomaly` |
+| generator outputs not detached in the D steps | `errD_fake.backward()` ran through both UNets and both translators, and the gradients were then discarded by `zero_grad()` | both D blocks now run their generator forwards under `no_grad()` |
+| translators run a third time for the cycle-D | identical inputs, identical weights, identical outputs | reuse the tensors from the diffusive-D block |
+| redundant host→device copies of `x1`/`x2` | already on the device | removed |
+| `num_workers=4` over an in-RAM `TensorDataset` | one IPC pickle per sample with no I/O to overlap | `NUM_WORKERS=0` |
+| validation every epoch | full diffusion sampler over every val slice, both directions, `batch=1` | `VAL_EVERY=10`; the final epoch is always validated |
+| `cudnn.benchmark` off | every shape is fixed at 256×256 | enabled, plus TF32 on Ampere+ |
+
+The training log now prints `s/it`, an epoch ETA and a run ETA every 100
+iterations, so "expensive architecture" and "broken run" are distinguishable
+without timing the output by hand.
+
+Also fixed: `val_l1_loss`/`val_psnr_values` were allocated with `num_epoch` rows
+but indexed by an epoch loop running to `num_epoch` inclusive, so the final epoch
+of any run raised `IndexError` *after* the entire training cost had been paid.
 
 ## Scoring
 

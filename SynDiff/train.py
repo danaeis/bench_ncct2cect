@@ -5,6 +5,7 @@ import torch
 import numpy as np
 
 import os
+import time
 
 import torch.autograd as autograd
 import torch.nn as nn
@@ -200,7 +201,18 @@ def train_syndiff(rank, gpu, args):
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
     device = torch.device('cuda:{}'.format(gpu))
-    
+
+    # SPEED. Every tensor in this loop has a fixed shape (batch_size x C x 256 x 256,
+    # the dataset is padded to a hardcoded 256 in dataset.py), which is exactly the
+    # case cudnn.benchmark is for: it autotunes the conv algorithms once on the first
+    # iteration and reuses that choice for the whole run. TF32 costs nothing on
+    # Ampere+ and is a no-op on older cards; the diffusion coefficients and the
+    # posterior sampling stay in fp32 either way.
+    torch.backends.cudnn.benchmark = True
+    if hasattr(torch.backends.cuda, 'matmul'):
+        torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     batch_size = args.batch_size
     
     nz = args.nz #latent dimension
@@ -214,10 +226,15 @@ def train_syndiff(rank, gpu, args):
     train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
                                                                     num_replicas=args.world_size,
                                                                     rank=rank)
+    # num_workers is a knob rather than a hardcoded 4 because CreateDatasetSynthesis
+    # returns a TensorDataset over an array that is ALREADY fully resident in RAM
+    # (dataset.py reads the whole .mat with h5py). There is no I/O to overlap, so
+    # every worker adds is one inter-process pickle per sample — at batch_size 1
+    # that overhead is a measurable fraction of the step. 0 = load in-process.
     data_loader = torch.utils.data.DataLoader(dataset,
                                                batch_size=batch_size,
                                                shuffle=False,
-                                               num_workers=4,
+                                               num_workers=args.num_workers,
                                                pin_memory=True,
                                                sampler=train_sampler,
                                                drop_last = True)
@@ -227,13 +244,18 @@ def train_syndiff(rank, gpu, args):
     data_loader_val = torch.utils.data.DataLoader(dataset_val,
                                                batch_size=batch_size,
                                                shuffle=False,
-                                               num_workers=4,
+                                               num_workers=args.num_workers,
                                                pin_memory=True,
                                                sampler=val_sampler,
                                                drop_last = True)
 
-    val_l1_loss=np.zeros([2,args.num_epoch,len(data_loader_val)])
-    val_psnr_values=np.zeros([2,args.num_epoch,len(data_loader_val)])
+    # num_epoch+1, not num_epoch: the epoch loop below is range(init_epoch,
+    # num_epoch+1) and indexes these by `epoch`, so the last epoch of a run wrote
+    # out of bounds and crashed with IndexError AFTER the full training cost had
+    # been paid. NaN-filled rather than zero-filled so that epochs skipped by
+    # --val_every read as "not measured" under nanmean instead of as a real 0.
+    val_l1_loss=np.full([2,args.num_epoch+1,len(data_loader_val)], np.nan)
+    val_psnr_values=np.full([2,args.num_epoch+1,len(data_loader_val)], np.nan)
     print('train data size:'+str(len(data_loader)))
     print('val data size:'+str(len(data_loader_val)))
     to_range_0_1 = lambda x: (x + 1.) / 2.
@@ -324,8 +346,12 @@ def train_syndiff(rank, gpu, args):
     pos_coeff = Posterior_Coefficients(args, device)
     T = get_time_schedule(args, device)
     
-    if args.resume:
-        checkpoint_file = os.path.join(exp_path, 'content.pth')
+    # `--resume` with no content.pth yet is the FIRST launch of a run, not an error:
+    # upstream called torch.load() unconditionally, so a wrapper script could not
+    # simply always pass --resume. Falling through to the else-branch here is what
+    # lets run_syndiff.sh make resuming the default and survive a crash-restart.
+    checkpoint_file = os.path.join(exp_path, 'content.pth')
+    if args.resume and os.path.exists(checkpoint_file):
         checkpoint = torch.load(checkpoint_file, map_location=device)
         init_epoch = checkpoint['epoch']
         epoch = init_epoch
@@ -363,12 +389,21 @@ def train_syndiff(rank, gpu, args):
         print("=> loaded checkpoint (epoch {})"
                   .format(checkpoint['epoch']))
     else:
+        if args.resume:
+            print('=> --resume given but no content.pth in {} — starting from '
+                  'epoch 0'.format(exp_path))
         global_step, epoch, init_epoch = 0, 0, 0
-    
-    
+
+
+    if args.detect_anomaly:
+        print('=> autograd anomaly detection ON — expect a 2-4x slowdown; '
+              'debugging only')
+        torch.autograd.set_detect_anomaly(True)
+
     for epoch in range(init_epoch, args.num_epoch+1):
         train_sampler.set_epoch(epoch)
-       
+        _t_last, _it_last = time.time(), 0
+
         for iteration, (x1, x2) in enumerate(data_loader):
             for p in disc_diffusive_1.parameters():  
                 p.requires_grad = True  
@@ -446,15 +481,24 @@ def train_syndiff(rank, gpu, args):
             # train with fake
             latent_z1 = torch.randn(batch_size, nz, device=device)
             latent_z2 = torch.randn(batch_size, nz, device=device)
-            
-            x1_0_predict = gen_non_diffusive_2to1(real_data2)
-            x2_0_predict = gen_non_diffusive_1to2(real_data1)            
-            #x_tp1 is concatenated with source contrast and x_0_predict is predicted
-            x1_0_predict_diff = gen_diffusive_1(torch.cat((x1_tp1.detach(),x2_0_predict),axis=1), t1, latent_z1)
-            x2_0_predict_diff = gen_diffusive_2(torch.cat((x2_tp1.detach(),x1_0_predict),axis=1), t2, latent_z2)
-            #sampling q(x_t | x_0_predict, x_t+1)
-            x1_pos_sample = sample_posterior(pos_coeff, x1_0_predict_diff[:,[0],:], x1_tp1, t1)
-            x2_pos_sample = sample_posterior(pos_coeff, x2_0_predict_diff[:,[0],:], x2_tp1, t2)
+
+            # SPEED: the generators are only producing the discriminator's INPUT
+            # here, so none of this needs a graph. Upstream fed the generator
+            # outputs in still attached (only x_tp1 was detached), so
+            # errD_fake.backward() below propagated all the way back through both
+            # NCSN++ UNets and both translators — and those gradients were then
+            # discarded by the gen_*.zero_grad() calls in the G block. no_grad()
+            # removes that wasted backward and the activation memory that went
+            # with it; the discriminator update is mathematically unchanged.
+            with torch.no_grad():
+                x1_0_predict = gen_non_diffusive_2to1(real_data2)
+                x2_0_predict = gen_non_diffusive_1to2(real_data1)
+                #x_tp1 is concatenated with source contrast and x_0_predict is predicted
+                x1_0_predict_diff = gen_diffusive_1(torch.cat((x1_tp1.detach(),x2_0_predict),axis=1), t1, latent_z1)
+                x2_0_predict_diff = gen_diffusive_2(torch.cat((x2_tp1.detach(),x1_0_predict),axis=1), t2, latent_z2)
+                #sampling q(x_t | x_0_predict, x_t+1)
+                x1_pos_sample = sample_posterior(pos_coeff, x1_0_predict_diff[:,[0],:], x1_tp1, t1)
+                x2_pos_sample = sample_posterior(pos_coeff, x2_0_predict_diff[:,[0],:], x2_tp1, t2)
             #D output for fake sample x_pos_sample
             output1 = disc_diffusive_1(x1_pos_sample, t1, x1_tp1.detach()).view(-1)
             output2 = disc_diffusive_2(x2_pos_sample, t2, x2_tp1.detach()).view(-1)       
@@ -472,10 +516,9 @@ def train_syndiff(rank, gpu, args):
             #D for cycle part
             disc_non_diffusive_cycle1.zero_grad()
             disc_non_diffusive_cycle2.zero_grad()
-            
-            #sample from p(x_0)
-            real_data1 = x1.to(device, non_blocking=True)
-            real_data2 = x2.to(device, non_blocking=True)
+
+            # (upstream re-copied x1/x2 host->device here; real_data1/real_data2 are
+            # already on the device and unmodified, so the copies were pure overhead)
 
             D_cycle1_real = disc_non_diffusive_cycle1(real_data1).view(-1)
             D_cycle2_real = disc_non_diffusive_cycle2(real_data2).view(-1) 
@@ -488,10 +531,12 @@ def train_syndiff(rank, gpu, args):
             errD_cycle_real = errD_cycle1_real + errD_cycle2_real
             errD_cycle_real.backward(retain_graph=True)
             # train with fake
-            
-            x1_0_predict = gen_non_diffusive_2to1(real_data2)
-            x2_0_predict = gen_non_diffusive_1to2(real_data1)
 
+            # SPEED: upstream ran both translators a THIRD time here, on the same
+            # real_data1/real_data2 with the same (not yet updated) weights — the
+            # outputs are identical to the ones the diffusive-D block just computed
+            # under no_grad, so reuse them. Same reasoning as above for the graph:
+            # this is the cycle discriminator's input, not something it trains.
             D_cycle1_fake = disc_non_diffusive_cycle1(x1_0_predict).view(-1)
             D_cycle2_fake = disc_non_diffusive_cycle2(x2_0_predict).view(-1) 
             
@@ -579,8 +624,12 @@ def train_syndiff(rank, gpu, args):
             errG2_cycle=F.l1_loss(x2_0_predict_cycle,real_data2)            
             errG_cycle = errG1_cycle + errG2_cycle            
 
-            torch.autograd.set_detect_anomaly(True)
-            
+            # NOTE: upstream called torch.autograd.set_detect_anomaly(True) here, in
+            # the hot loop. It is a GLOBAL, STICKY flag — one call turns on per-node
+            # stack-trace recording and NaN checking for every backward pass in the
+            # process for the rest of the run, typically a 2-4x slowdown, and it was
+            # never switched off. It is leftover debug code; run with
+            # `--detect_anomaly` if a NaN hunt is actually needed.
             errG = args.lambda_l1_loss*errG_cycle +  errG_adv + errG_cycle_adv + args.lambda_l1_loss*errG_L1
             errG.backward()
             
@@ -592,8 +641,16 @@ def train_syndiff(rank, gpu, args):
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
-                    print('epoch {} iteration{}, G-Cycle: {}, G-L1: {}, G-Adv: {}, G-cycle-Adv: {}, G-Sum: {}, D Loss: {}, D_cycle Loss: {}'.format(epoch,iteration, errG_cycle.item(), errG_L1.item(),  errG_adv.item(), errG_cycle_adv.item(), errG.item(), errD.item(), errD_cycle.item()))
-        
+                    # sec/it and a projected wall-clock for the run: without it the
+                    # only way to tell "this architecture is expensive" from "this
+                    # run is broken/restart-looping" was to time the log lines by
+                    # hand. ETA counts the remaining epochs at the current rate.
+                    now = time.time()
+                    sec_it = (now - _t_last) / max(1, iteration - _it_last)
+                    _t_last, _it_last = now, iteration
+                    eta_h = sec_it * len(data_loader) * (args.num_epoch - epoch) / 3600.0
+                    print('epoch {} iteration{}, G-Cycle: {}, G-L1: {}, G-Adv: {}, G-cycle-Adv: {}, G-Sum: {}, D Loss: {}, D_cycle Loss: {} | {:.3f}s/it, epoch ETA {:.2f}h, run ETA {:.1f}h'.format(epoch,iteration, errG_cycle.item(), errG_L1.item(),  errG_adv.item(), errG_cycle_adv.item(), errG.item(), errD.item(), errD_cycle.item(), sec_it, sec_it*(len(data_loader)-iteration)/3600.0, eta_h))
+
         if not args.no_lr_decay:
             
             scheduler_gen_diffusive_1.step()
@@ -672,14 +729,24 @@ def train_syndiff(rank, gpu, args):
                     optimizer_gen_non_diffusive_2to1.swap_parameters_with_ema(store_params_in_ema=True)
 
 
-        for iteration, (x_val , y_val) in enumerate(data_loader_val): 
-        
+        # Validation is not cheap: it runs the full num_timesteps diffusion sampler
+        # over EVERY val slice, twice (once per direction), one slice at a time. On
+        # a CT-sized val split that is a large fixed tax on every epoch, for a PSNR
+        # number nobody reads at epoch granularity. --val_every 1 restores the
+        # upstream behaviour; the final epoch is always validated so a run never
+        # ends without a val score. The skipped epochs stay NaN in the .npy arrays.
+        if not (args.val_every > 0 and
+                (epoch % args.val_every == 0 or epoch == args.num_epoch)):
+            continue
+
+        for iteration, (x_val , y_val) in enumerate(data_loader_val):
+
             real_data = x_val.to(device, non_blocking=True)
             source_data = y_val.to(device, non_blocking=True)
-            
+
             x1_t = torch.cat((torch.randn_like(real_data),source_data),axis=1)
             #diffusion steps
-            fake_sample1 = sample_from_model(pos_coeff, gen_diffusive_1, args.num_timesteps, x1_t, T, args)            
+            fake_sample1 = sample_from_model(pos_coeff, gen_diffusive_1, args.num_timesteps, x1_t, T, args)
             fake_sample1 = to_range_0_1(fake_sample1) ; fake_sample1 = fake_sample1/fake_sample1.mean()
             real_data = to_range_0_1(real_data) ; real_data = real_data/real_data.mean()
 
@@ -733,7 +800,19 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=1024,
                         help='seed used for initialization')
     
-    parser.add_argument('--resume', action='store_true',default=False)
+    parser.add_argument('--resume', action='store_true',default=False,
+                        help='continue from <exp>/content.pth if it exists; a '
+                             'missing file is not an error (first launch)')
+    parser.add_argument('--num_workers', type=int, default=4,
+                        help='DataLoader workers. The dataset is already fully in '
+                             'RAM, so 0 (in-process) is usually fastest and avoids '
+                             'one IPC round-trip per sample')
+    parser.add_argument('--val_every', type=int, default=1,
+                        help='run the validation sampler every N epochs (the final '
+                             'epoch is always validated). 0 disables validation')
+    parser.add_argument('--detect_anomaly', action='store_true', default=False,
+                        help='enable autograd anomaly detection (2-4x slower); '
+                             'upstream had this permanently on by accident')
     
     parser.add_argument('--image_size', type=int, default=32,
                             help='size of image')
