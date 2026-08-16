@@ -77,6 +77,9 @@ def main() -> None:
     ap.add_argument('--save_epoch_freq', type=int, default=5)
     ap.add_argument('--print_freq', type=int, default=200, help='iterations between loss lines')
     ap.add_argument('--feature_size', type=int, default=48, help='SwinUNETR width (mult of 12)')
+    ap.add_argument('--n_slices', type=int, default=1,
+                    help='2.5-D context: odd number of adjacent axial slices fed as '
+                         'input channels, predicting the centre slice (SwinUNETR only)')
     ap.add_argument('--transunet_dir', type=Path, default=Path('TransUNet'))
     ap.add_argument('--vit_ckpt', default='ResViT/model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz',
                     help='TransUNet ImageNet-21k init; pass "" to train from scratch')
@@ -102,25 +105,28 @@ def main() -> None:
         log.flush()
 
     # ---- data ---------------------------------------------------------------
-    train_ds = ABSliceDataset(args.dataroot, 'train', args.size)
-    val_ds = ABSliceDataset(args.dataroot, 'val', args.size)
+    train_ds = ABSliceDataset(args.dataroot, 'train', args.size, args.n_slices)
+    val_ds = ABSliceDataset(args.dataroot, 'val', args.size, args.n_slices)
     train_ld = DataLoader(train_ds, batch_size=args.batch, shuffle=True,
                           num_workers=args.workers, drop_last=True, pin_memory=True)
     val_ld = DataLoader(val_ds, batch_size=args.batch, shuffle=False,
                         num_workers=args.workers, pin_memory=True)
     say(f'[data] train {len(train_ds)} slices | val {len(val_ds)} slices '
-        f'| {len(train_ld)} iters/epoch @ batch {args.batch}')
+        f'| {len(train_ld)} iters/epoch @ batch {args.batch}'
+        + (f' | 2.5-D: {args.n_slices} input slices -> 1 output slice'
+           if args.n_slices > 1 else ''))
 
     # ---- models -------------------------------------------------------------
     vit_ckpt = Path(args.vit_ckpt) if (args.arch == 'transunet' and args.vit_ckpt) else None
-    netG = build_generator(args.arch, args.size, 1, 1, args.feature_size,
+    netG = build_generator(args.arch, args.size, args.n_slices, 1, args.feature_size,
                            args.transunet_dir, vit_ckpt).to(device)
     # Re-initialising TransUNet would throw away the checkpoint we just loaded.
     if args.arch == 'swinunetr':
         init_weights(netG)
 
     use_gan = args.lambda_adv > 0
-    netD = init_weights(NLayerDiscriminator(in_ch=2)).to(device) if use_gan else None
+    netD = (init_weights(NLayerDiscriminator(in_ch=args.n_slices + 1)).to(device)
+            if use_gan else None)
     say(f'[model] {args.arch} | G params {sum(p.numel() for p in netG.parameters())/1e6:.1f}M'
         + (f" | D params {sum(p.numel() for p in netD.parameters())/1e6:.1f}M" if use_gan
            else ' | adversarial loss DISABLED (lambda_adv=0)'))

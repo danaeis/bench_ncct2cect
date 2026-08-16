@@ -40,6 +40,8 @@ def main() -> None:
     ap.add_argument('--batch', type=int, default=8)
     ap.add_argument('--workers', type=int, default=4)
     ap.add_argument('--feature_size', type=int, default=48)
+    ap.add_argument('--n_slices', type=int, default=1,
+                    help='must match the value used at training time')
     ap.add_argument('--transunet_dir', type=Path, default=Path('TransUNet'))
     ap.add_argument('--device', default='cuda')
     args = ap.parse_args()
@@ -53,13 +55,13 @@ def main() -> None:
     # The architecture must be rebuilt exactly as trained. TransUNet's ImageNet
     # init is irrelevant here — load_state_dict overwrites all of it — so skip
     # the 400 MB .npz read and build the bare network.
-    netG = build_generator(args.arch, args.size, 1, 1, args.feature_size,
+    netG = build_generator(args.arch, args.size, args.n_slices, 1, args.feature_size,
                            args.transunet_dir, None).to(device)
     netG.load_state_dict(torch.load(ckpt, map_location=device))
     netG.eval()
     print(f'[model] {args.arch} <- {ckpt}')
 
-    ds = ABSliceDataset(args.dataroot, args.phase, args.size)
+    ds = ABSliceDataset(args.dataroot, args.phase, args.size, args.n_slices)
     ld = DataLoader(ds, batch_size=args.batch, shuffle=False,
                     num_workers=args.workers, pin_memory=True)
     args.out.mkdir(parents=True, exist_ok=True)

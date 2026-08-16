@@ -39,9 +39,10 @@ Tensors are in **[-1, 1]** end to end (pix2pix convention), which is why
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -55,20 +56,44 @@ ARCHS = ('swinunetr', 'transunet')
 # --------------------------------------------------------------------------- #
 # data
 # --------------------------------------------------------------------------- #
+# `<case>_<zzzz>` — anchored, and the case group is greedy, because our case_ids
+# are dotted DICOM UIDs containing both '.' and '_'. Only the fixed-width z at the
+# end is unambiguous. Same reasoning as reassemble_nifti.py's --pattern.
+_STEM_RX = re.compile(r'^(?P<case>.+)_(?P<z>\d{4})$')
+
+
 class ABSliceDataset(Dataset):
     """`<root>/<phase>/<case>_<zzzz>.png`, one image holding [A | B] side by side.
 
     A = NCCT (input), B = CECT (target); both single-channel, written by
-    `prep_benchmark_data.py --format pix2pix`. Returns float tensors in [-1, 1]
-    shaped (1, size, size), plus the file stem so inference can name its output
-    `<case>_<zzzz>_fake_B.npy` and `reassemble_nifti.py` can find it again.
+    `prep_benchmark_data.py --format pix2pix`. Returns float tensors in [-1, 1],
+    plus the file stem so inference can name its output `<case>_<zzzz>_fake_B.npy`
+    and `reassemble_nifti.py` can find it again.
+
+    2.5-D (`n_slices` > 1)
+    ---------------------
+    With `n_slices = N` (odd), A becomes a stack of the N axial slices centred on
+    z — so the model sees `N//2` slices of context above and below — while B stays
+    the single centre slice. That is the same input geometry as the `slices5_k2` /
+    `slices11_k5` runs in `../synthetic_CECT`, which makes the numbers directly
+    comparable to your own model rather than only to the other 2-D baselines.
+
+    It also needs **no re-prep**: the stack is gathered at load time from the
+    per-slice PNGs already on disk. At the top and bottom of a volume the index
+    is clamped (the edge slice repeats) rather than zero-padded, so the model
+    never sees fabricated air where anatomy should be.
+
+    Output geometry is unchanged — one predicted slice per z — so inference and
+    reassembly are identical for any N.
 
     No augmentation. Random flips would mirror left/right anatomy (liver ↔
     spleen), and random crops would break the 1:1 correspondence with the source
     grid that reassembly depends on — the slices are already exactly `size`.
     """
 
-    def __init__(self, root: Path, phase: str, size: int = 256):
+    def __init__(self, root: Path, phase: str, size: int = 256, n_slices: int = 1):
+        if n_slices < 1 or n_slices % 2 == 0:
+            raise ValueError(f'n_slices must be odd and >= 1, got {n_slices}')
         self.dir = Path(root) / phase
         if not self.dir.is_dir():
             raise FileNotFoundError(
@@ -78,22 +103,58 @@ class ABSliceDataset(Dataset):
         if not self.paths:
             raise FileNotFoundError(f'no *.png in {self.dir}')
         self.size = size
+        self.n_slices = n_slices
+
+        if n_slices > 1:
+            self._cz: List[Tuple[str, int]] = []
+            self._by_cz: Dict[Tuple[str, int], Path] = {}
+            zrange: Dict[str, Tuple[int, int]] = {}
+            for p in self.paths:
+                m = _STEM_RX.match(p.stem)
+                if m is None:
+                    raise ValueError(
+                        f'{p.name}: cannot parse <case>_<zzzz>; n_slices>1 needs the '
+                        f'z-index to find neighbouring slices')
+                c, z = m.group('case'), int(m.group('z'))
+                self._cz.append((c, z))
+                self._by_cz[(c, z)] = p
+                lo, hi = zrange.get(c, (z, z))
+                zrange[c] = (min(lo, z), max(hi, z))
+            self._zrange = zrange
 
     def __len__(self) -> int:
         return len(self.paths)
 
-    def __getitem__(self, i: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
-        p = self.paths[i]
+    def _halves(self, p: Path) -> Tuple[np.ndarray, np.ndarray]:
+        """One AB-PNG → (A, B), each [0,1] and `size`×`size`."""
         im = np.asarray(Image.open(p).convert('L'), dtype=np.float32) / 255.0
-        h, w = im.shape
-        half = w // 2
+        half = im.shape[1] // 2
         a, b = im[:, :half], im[:, half:]
         if a.shape[0] != self.size or a.shape[1] != self.size:
             raise ValueError(
                 f'{p}: expected {self.size}x{self.size} per side, got {a.shape}. '
                 f'Re-run prep with --size {self.size}.')
-        to_t = lambda x: torch.from_numpy(x * 2.0 - 1.0).unsqueeze(0)   # [0,1] -> [-1,1]
-        return to_t(a), to_t(b), p.stem
+        return a, b
+
+    def __getitem__(self, i: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
+        p = self.paths[i]
+        a, b = self._halves(p)
+
+        if self.n_slices == 1:
+            a_stack = a[None]
+        else:
+            c, z = self._cz[i]
+            lo, hi = self._zrange[c]
+            k = self.n_slices // 2
+            chans = []
+            for dz in range(-k, k + 1):
+                zz = min(max(z + dz, lo), hi)          # clamp at the volume ends
+                q = self._by_cz.get((c, zz))
+                chans.append(a if q is None or q == p else self._halves(q)[0])
+            a_stack = np.stack(chans)                  # (N, size, size)
+
+        to_t = lambda x: torch.from_numpy(np.ascontiguousarray(x) * 2.0 - 1.0)
+        return to_t(a_stack), to_t(b[None]), p.stem
 
 
 # --------------------------------------------------------------------------- #
@@ -146,15 +207,26 @@ def _build_transunet(size: int, in_ch: int, out_ch: int,
                      transunet_dir: Path, vit_ckpt: Path | None) -> nn.Module:
     """Beckschen TransUNet (R50-ViT-B_16) as a 1->1 image generator.
 
-    `in_ch` is ignored on purpose: `vit_seg_modeling.VisionTransformer.forward`
-    already does `if x.size()[1] == 1: x = x.repeat(1, 3, 1, 1)`, because the
-    R50 stem is a 3-channel ImageNet conv. Feeding it our single channel is the
-    upstream-intended path, not a hack.
+    `in_ch` must be 1: `vit_seg_modeling.VisionTransformer.forward` does
+    `if x.size()[1] == 1: x = x.repeat(1, 3, 1, 1)`, because the R50 stem is a
+    3-channel ImageNet conv. Feeding it our single channel is the
+    upstream-intended path, not a hack — but it also means a 2.5-D stack of N
+    channels would sail past that guard straight into a shape error, so we
+    refuse it up front with an explanation instead.
 
     `n_classes` becomes our output channel count, so the segmentation head emits
     one continuous map instead of class logits.
     """
     d = Path(transunet_dir)
+    if in_ch != 1:
+        raise SystemExit(
+            f'TransUNet does not support a {in_ch}-slice 2.5-D input (N_SLICES>1).\n'
+            f'  Its R50 stem is a fixed 3-channel ImageNet conv and forward() only\n'
+            f'  expands a SINGLE channel to 3. Supporting N would mean replacing\n'
+            f'  hybrid_model.root.conv with an N-channel conv and re-deriving its\n'
+            f'  init from the pretrained 3-channel weights — doable, but it changes\n'
+            f'  the published layer, so it is deliberately not done silently.\n'
+            f'  Use N_SLICES=1 for TransUNet, or run 2.5-D on SwinUNETR.')
     if not (d / 'networks' / 'vit_seg_modeling.py').is_file():
         raise SystemExit(f'TransUNet tree not found at {d}')
     sys.path.insert(0, str(d))

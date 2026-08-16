@@ -79,8 +79,54 @@ grid that reassembly depends on.
 
 Tunables (env): `SPLIT`, `DATAROOT`, `REPREP`, `SIZE` (256), `GPU`, `NAME`,
 `CKPT_DIR`, `NITER` / `NITER_DECAY`, `BATCH`, `WORKERS`, `LR`, `LAMBDA_L1`,
-`LAMBDA_ADV`, `SAVE_EPOCH_FREQ`, `FEATURE_SIZE`, `WHICH_EPOCH`, `CONTINUE`,
-`OUT_NIFTI`, `MIN_TISSUE_FRAC`.
+`LAMBDA_ADV`, `SAVE_EPOCH_FREQ`, `FEATURE_SIZE`, `N_SLICES`, `WHICH_EPOCH`,
+`CONTINUE`, `ALLOW_CPU`, `OUT_NIFTI`, `MIN_TISSUE_FRAC`.
+
+## 2.5-D context (`N_SLICES`) — SwinUNETR only
+
+```bash
+N_SLICES=5  NAME=vindr_swinunetr_s5  ./run_swinunetr.sh all
+N_SLICES=11 NAME=vindr_swinunetr_s11 ./run_swinunetr.sh all
+```
+
+`N_SLICES=N` (odd) feeds the N axial slices centred on z as input channels and
+still predicts the single centre CECT slice. That is the same input geometry as
+the `slices5_k2` / `slices11_k5` runs in `../synthetic_CECT`, so these numbers
+land next to your own model's rather than only next to the other 2-D baselines.
+
+- **No re-prep.** The stack is gathered at load time from the per-slice PNGs
+  already on disk, so `N_SLICES` costs nothing but a little extra I/O.
+- **Edges clamp, they don't pad.** At the top and bottom of a volume the index
+  is clamped so the edge slice repeats — the model never sees fabricated air
+  where anatomy should be.
+- **Output geometry is unchanged** — one predicted slice per z — so inference
+  and reassembly are identical for any N.
+- The conditional discriminator widens to `N+1` input channels accordingly.
+
+### Why not true 3-D at 5–11 slices
+
+MONAI's 3-D SwinUNETR requires **every** spatial dim to be divisible by 32 (five
+stages of patch-merging), so a 5- or 11-slice slab raises
+`ValueError: spatial dimensions [2] ... must be divisible by 2**5`. The smallest
+legal slab is 32. A depth-32 run is possible and would unlock the 3-D
+self-supervised `model_swinvit.pt` weights, but it needs a volumetric data path
+and sliding-window inference, and 62.2M params over a 32×256×256 sample will not
+fit an 11 GB card. 2.5-D gets the z-context at 2-D cost.
+
+### TransUNet
+
+`N_SLICES` must stay 1. Its R50 stem is a fixed 3-channel ImageNet conv and
+`forward()` only expands a *single* channel to 3, so an N-channel stack would
+walk past that guard into a shape error. The runner refuses it with an
+explanation rather than silently rebuilding a published layer.
+
+## Never train on CPU by accident
+
+`train`/`test` now preflight CUDA and **abort** if it is unavailable, printing
+the torch build's CUDA version alongside the fix. This exists because a torch
+built for a newer CUDA than the driver supports imports perfectly happily and
+just reports `is_available() == False` — which cost a CycleGAN run a full day of
+"Initialized with device cpu". Set `ALLOW_CPU=1` to override deliberately.
 
 Smoke-test first:
 

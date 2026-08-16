@@ -62,6 +62,11 @@ LAMBDA_L1="${LAMBDA_L1:-100}"   # ResViT's --lambda_A
 LAMBDA_ADV="${LAMBDA_ADV:-1.0}" # 0 -> pure-L1 ablation, no discriminator
 SAVE_EPOCH_FREQ="${SAVE_EPOCH_FREQ:-5}"
 FEATURE_SIZE="${FEATURE_SIZE:-48}"   # SwinUNETR width; must be a multiple of 12
+# 2.5-D context: odd number of adjacent axial slices fed as input channels,
+# predicting the centre slice. 1 = plain 2-D. 5/7/9/11 mirror the slices5_k2 /
+# slices11_k5 runs in ../synthetic_CECT, so the numbers stay comparable to your
+# own model. SwinUNETR only — see backbone_common.py for why TransUNet refuses.
+N_SLICES="${N_SLICES:-1}"
 WHICH_EPOCH="${WHICH_EPOCH:-latest}"
 CONTINUE="${CONTINUE:-0}"       # 1 = resume from latest_net_G.pth
 OUT_NIFTI="${OUT_NIFTI:-$HERE/results/${NAME}_nifti}"
@@ -81,6 +86,29 @@ export no_proxy="localhost,127.0.0.1,::1${no_proxy:+,$no_proxy}"
 export NO_PROXY="$no_proxy"
 
 log() { printf '\n\033[1;36m[run_%s:%s]\033[0m %s\n' "$ARCH" "$1" "$2"; }
+
+# Fail loudly rather than training on CPU for days. A torch built for a newer
+# CUDA than the driver supports still imports fine and silently reports
+# is_available()==False, which is how a CycleGAN run burned a day printing
+# "Initialized with device cpu". ALLOW_CPU=1 to override deliberately.
+require_cuda() {
+  [ "${ALLOW_CPU:-0}" = 1 ] && return 0
+  CUDA_VISIBLE_DEVICES="$GPU" "$PY" - <<'EOF' || exit 1
+import sys, torch
+if torch.cuda.is_available():
+    print(f"  cuda ok: {torch.cuda.get_device_name(0)} | torch {torch.__version__} "
+          f"(built for CUDA {torch.version.cuda})")
+    sys.exit(0)
+print(f"ERROR: CUDA is not available. torch {torch.__version__} was built for CUDA "
+      f"{torch.version.cuda}.", file=sys.stderr)
+print("  If the driver is older than that build, install a matching torch:", file=sys.stderr)
+print("    nvidia-smi --query-gpu=driver_version --format=csv   # driver's max CUDA", file=sys.stderr)
+print("    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126",
+      file=sys.stderr)
+print("  Or set ALLOW_CPU=1 to train on CPU anyway (it will not finish).", file=sys.stderr)
+sys.exit(1)
+EOF
+}
 
 resolve_split() {
   if [ -n "$SPLIT" ]; then
@@ -158,7 +186,8 @@ do_prep() {
 
 do_train() {
   [ -d "$DATAROOT/train" ] || { echo "ERROR: $DATAROOT/train missing (run prep first)" >&2; exit 1; }
-  log train "$ARCH ($NITER + $NITER_DECAY epochs, lambda_adv=$LAMBDA_ADV)"
+  require_cuda
+  log train "$ARCH ($NITER + $NITER_DECAY epochs, lambda_adv=$LAMBDA_ADV, n_slices=$N_SLICES)"
   local extra=()
   [ "$CONTINUE" = 1 ] && extra+=(--continue_train)
   if [ "$ARCH" = transunet ]; then
@@ -174,6 +203,7 @@ do_train() {
       --niter "$NITER" --niter_decay "$NITER_DECAY" --lr "$LR" \
       --lambda_l1 "$LAMBDA_L1" --lambda_adv "$LAMBDA_ADV" \
       --save_epoch_freq "$SAVE_EPOCH_FREQ" --feature_size "$FEATURE_SIZE" \
+      --n_slices "$N_SLICES" \
       ${extra[@]+"${extra[@]}"}
       # ^ the `+` form is required: under `set -u`, bash 3.2 (macOS) treats a
       #   bare "${extra[@]}" on an empty array as an unbound variable.
@@ -182,12 +212,14 @@ do_train() {
 do_test() {
   local w="$CKPT_DIR/$NAME/${WHICH_EPOCH}_net_G.pth"
   [ -f "$w" ] || { echo "ERROR: generator weights missing: $w (run train first)" >&2; exit 1; }
+  require_cuda
   log test "inference on the test split -> *_fake_B.npy"
   CUDA_VISIBLE_DEVICES="$GPU" "$PY" "$HERE/infer_backbone.py" \
       --arch "$ARCH" --dataroot "$DATAROOT" --name "$NAME" \
       --checkpoints_dir "$CKPT_DIR" --which_epoch "$WHICH_EPOCH" \
       --out "$SLICES" --size "$SIZE" --batch "$BATCH" --workers "$WORKERS" \
-      --feature_size "$FEATURE_SIZE" --transunet_dir "$HERE/TransUNet"
+      --feature_size "$FEATURE_SIZE" --n_slices "$N_SLICES" \
+      --transunet_dir "$HERE/TransUNet"
 }
 
 do_reassemble() {

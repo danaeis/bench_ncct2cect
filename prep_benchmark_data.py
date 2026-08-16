@@ -60,6 +60,53 @@ def _to_unit(vol: np.ndarray, hu_min: float, hu_max: float) -> np.ndarray:
     return (v - hu_min) / (hu_max - hu_min)
 
 
+class _MatWriter:
+    """Streaming writer for SynDiff's `data_<phase>_<contrast>.mat`.
+
+    Buffers a fixed number of slices and extends a resizable HDF5 dataset, so
+    peak RAM is one chunk rather than the whole split.
+
+    WHY THIS IS NOT A LIST. The obvious version — append every slice to a list,
+    `np.stack()` at the end — held all three phases × both contrasts in memory
+    at once and then allocated a second full copy during the stack. On our VinDr
+    split (25,251 train + ~5,200 val + ~5,200 test slices at 256², float32) that
+    is 18.7 GB resident peaking at 25.3 GB, which is enough to OOM a shared box
+    or drive it into swap-thrash. Streaming keeps it flat at ~64 MB.
+    """
+
+    CHUNK = 256          # slices per HDF5 extend; 256 * 256² * 4B = 64 MB
+
+    def __init__(self, path: Path, size: int):
+        import h5py                     # lazy: only the .mat path needs it
+        self._f = h5py.File(path, 'w')
+        self._ds = self._f.create_dataset(
+            'data_fs', shape=(0, size, size), maxshape=(None, size, size),
+            dtype='float32', chunks=(1, size, size))
+        self._buf: List[np.ndarray] = []
+        self.n = 0
+
+    def append(self, sl: np.ndarray) -> int:
+        """Queue one slice; returns its row index in the finished dataset."""
+        self._buf.append(sl)
+        self.n += 1
+        if len(self._buf) >= self.CHUNK:
+            self.flush()
+        return self.n - 1
+
+    def flush(self) -> None:
+        if not self._buf:
+            return
+        arr = np.stack(self._buf).astype(np.float32)
+        k = self._ds.shape[0]
+        self._ds.resize(k + arr.shape[0], axis=0)
+        self._ds[k:k + arr.shape[0]] = arr
+        self._buf = []
+
+    def close(self) -> None:
+        self.flush()
+        self._f.close()
+
+
 def _resize01(sl: np.ndarray, size: int) -> np.ndarray:
     """[0,1] slice → size×size [0,1] via PIL bicubic (uint8 round-trip is fine at
     8-bit display precision, which is all the PNG path carries anyway)."""
@@ -87,7 +134,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
 
     index_rows: List[dict] = []
-    mat_buffers = {}    # (phase, 'NCCT'|'CECT') -> list of slices
+    mat_writers = {}    # (phase, 'NCCT'|'CECT') -> _MatWriter, opened on first use
 
     for phase in args.phases:
         cases = split.get(phase, [])
@@ -139,9 +186,13 @@ def main():
                     Image.fromarray((b_r * 255).astype(np.uint8), mode='L').save(fb)
                     out_ref = str(fa)
                 else:
-                    mat_buffers.setdefault((phase, 'NCCT'), []).append(a_r)
-                    mat_buffers.setdefault((phase, 'CECT'), []).append(b_r)
-                    out_ref = f'{phase}#{len(mat_buffers[(phase,"NCCT")])-1}'  # row index
+                    for contrast, sl in (('NCCT', a_r), ('CECT', b_r)):
+                        key = (phase, contrast)
+                        if key not in mat_writers:
+                            mat_writers[key] = _MatWriter(
+                                args.out / f'data_{phase}_{contrast}.mat', args.size)
+                        row = mat_writers[key].append(sl)
+                    out_ref = f'{phase}#{row}'          # row index, same for both
 
                 index_rows.append({
                     'phase': phase, 'case_id': cid, 'z': z,
@@ -150,14 +201,10 @@ def main():
                     'target_phase': target_phase, 'out_ref': out_ref,
                 })
 
-    if args.format == 'mat':
-        import h5py            # lazy: only the .mat path needs it
-        for (phase, contrast), slices in mat_buffers.items():
-            arr = np.stack(slices).astype(np.float32)            # (N, size, size), [0,1]
-            fn = args.out / f'data_{phase}_{contrast}.mat'
-            with h5py.File(fn, 'w') as f:
-                f.create_dataset('data_fs', data=arr)
-            print(f'  wrote {fn}  {arr.shape}')
+    for (phase, contrast), w in mat_writers.items():
+        n = w.n
+        w.close()
+        print(f'  wrote {args.out}/data_{phase}_{contrast}.mat  ({n}, {args.size}, {args.size})')
 
     idx = args.out / 'slice_index.csv'
     with idx.open('w', newline='') as f:

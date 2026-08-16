@@ -86,6 +86,32 @@ export NO_PROXY="$no_proxy"
 
 log() { printf '\n\033[1;36m[run_cyclegan:%s]\033[0m %s\n' "$1" "$2"; }
 
+# Fail loudly rather than training on CPU for days. util.init_ddp() falls back to
+# CPU with only a log line, and a torch built for a newer CUDA than the driver
+# supports imports fine while reporting is_available()==False — which is exactly
+# how a run spent a day printing "Initialized with device cpu". GPU=-1 or
+# ALLOW_CPU=1 to opt in deliberately.
+require_cuda() {
+  [ "${ALLOW_CPU:-0}" = 1 ] && return 0
+  [ "$GPU" = "-1" ] && return 0
+  CUDA_VISIBLE_DEVICES="$CUDA_MASK" "$PY" - <<'EOF' || exit 1
+import sys, torch
+if torch.cuda.is_available():
+    print(f"  cuda ok: {torch.cuda.get_device_name(0)} | torch {torch.__version__} "
+          f"(built for CUDA {torch.version.cuda})")
+    sys.exit(0)
+print(f"ERROR: CUDA is not available. torch {torch.__version__} was built for CUDA "
+      f"{torch.version.cuda}.", file=sys.stderr)
+print("  Check what the driver supports and install a matching torch:", file=sys.stderr)
+print("    nvidia-smi --query-gpu=driver_version --format=csv", file=sys.stderr)
+print("    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126",
+      file=sys.stderr)
+print("  Or set ALLOW_CPU=1 / GPU=-1 to run on CPU anyway (it will not finish).",
+      file=sys.stderr)
+sys.exit(1)
+EOF
+}
+
 # `sed -i` takes a mandatory suffix on BSD/macOS and none on GNU; write through a
 # temp file so this works on either.
 sed_inplace() {
@@ -191,6 +217,7 @@ do_prep() {
 
 do_train() {
   [ -d "$DATAROOT/trainA" ] || { echo "ERROR: $DATAROOT/trainA missing (run prep first)" >&2; exit 1; }
+  require_cuda
   log train "CycleGAN A=NCCT -> B=CECT ($NITER + $NITER_DECAY epochs)"
   apply_shims
   set_resume_args "$CYCLEGAN/checkpoints/$NAME"
@@ -210,6 +237,7 @@ do_train() {
 do_test() {
   local w="$CYCLEGAN/checkpoints/$NAME/latest_net_G_A.pth"
   [ -f "$w" ] || { echo "ERROR: generator weights missing: $w (run train first)" >&2; exit 1; }
+  require_cuda
   log test "netG_A over the test slices -> *_fake.png"
   apply_shims
   cd "$CYCLEGAN"
