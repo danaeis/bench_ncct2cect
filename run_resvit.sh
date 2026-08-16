@@ -44,6 +44,12 @@ BATCH="${BATCH:-1}"
 # with no numbered checkpoint and an empty log.txt — set SAVE_EPOCH_FREQ=1 for
 # smoke tests so you can tell a short run from a crashed one.
 SAVE_EPOCH_FREQ="${SAVE_EPOCH_FREQ:-5}"
+# Resume an interrupted stage instead of silently restarting at epoch 1 and
+# overwriting the checkpoints. Same reasoning as SynDiff's RESUME: these runs are
+# far too long to redo because a box rebooted. EPOCH_COUNT overrides the epoch
+# the schedule restarts from (default: one past the newest numbered checkpoint).
+RESUME="${RESUME:-1}"
+EPOCH_COUNT="${EPOCH_COUNT:-}"
 OUT_NIFTI="${OUT_NIFTI:-$RESVIT/results/vindr_nifti}"
 
 VIT_DIR="$RESVIT/model/vit_checkpoint/imagenet21k"
@@ -114,6 +120,39 @@ apply_shims() {
   fi
 }
 
+# Newest <epoch>_net_G.pth in a checkpoints dir, or empty if there are none.
+latest_numbered_epoch() {
+  ls "$1"/[0-9]*_net_G.pth 2>/dev/null \
+    | sed 's#.*/##; s#_net_G\.pth$##' \
+    | grep -E '^[0-9]+$' | sort -n | tail -1
+}
+
+# Populate $RESUME_ARGS for an experiment dir: the flags that make train.py pick
+# up where it stopped, or nothing at all if there is no checkpoint to resume.
+#
+# ResViT records no "current epoch" anywhere, so the restart point is derived
+# from the newest NUMBERED checkpoint (written every --save_epoch_freq epochs).
+# `latest_net_G.pth` is written more often than that (every --save_latest_freq
+# iterations), so the weights we reload can be slightly AHEAD of the epoch we
+# tell the lr schedule to resume at. That errs on the safe side — it replays at
+# most SAVE_EPOCH_FREQ epochs of schedule — but it does mean the lr curve of a
+# resumed run is not bit-identical to an uninterrupted one. Pin EPOCH_COUNT
+# yourself if you need it exact.
+RESUME_ARGS=()
+set_resume_args() {
+  RESUME_ARGS=()
+  local dir="$1" n start
+  [ "$RESUME" = 1 ] || return 0
+  if [ ! -f "$dir/latest_net_G.pth" ]; then
+    echo "  RESUME: no $dir/latest_net_G.pth — starting from scratch"
+    return 0
+  fi
+  n="$(latest_numbered_epoch "$dir")"
+  start="${EPOCH_COUNT:-$(( ${n:-0} + 1 ))}"
+  RESUME_ARGS=(--continue_train --which_epoch latest --epoch_count "$start")
+  echo "  RESUME: continuing from $dir/latest_net_G.pth at epoch $start"
+}
+
 # ---- stages -----------------------------------------------------------------
 do_setup() {
   log setup "check ResViT tree"
@@ -148,8 +187,10 @@ do_prep() {
 do_pretrain() {
   log pretrain "stage 1: res_cnn generator ($((NITER*2)) + $((NITER_DECAY*2)) epochs)"
   apply_shims
+  set_resume_args "$RESVIT/checkpoints/$PRE_NAME"
   cd "$RESVIT"
   "$PY" train.py --dataroot "$DATAROOT" --name "$PRE_NAME" --gpu_ids "$GPU_IDS" \
+      ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} \
       --model resvit_one --which_model_netG res_cnn --which_direction AtoB \
       --lambda_A 100 --dataset_mode aligned --norm batch --pool_size 0 \
       --input_nc 1 --output_nc 1 --loadSize "$SIZE" --fineSize "$SIZE" \
@@ -162,8 +203,13 @@ do_finetune() {
   [ -f "$pre_weights" ] || { echo "ERROR: pretrain weights missing: $pre_weights (run pretrain first)" >&2; exit 1; }
   log finetune "stage 2: full ResViT from $pre_weights"
   apply_shims
+  # NB: on a resume the --pre_trained_* flags below are harmless — resvit_one
+  # loads the pretrained ART/transformer weights first, then --continue_train
+  # overwrites netG/netD with the fine-tune checkpoint.
+  set_resume_args "$RESVIT/checkpoints/$NAME"
   cd "$RESVIT"
   "$PY" train.py --dataroot "$DATAROOT" --name "$NAME" --gpu_ids "$GPU_IDS" \
+      ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} \
       --model resvit_one --which_model_netG resvit --which_direction AtoB \
       --lambda_A 100 --dataset_mode aligned --norm batch --pool_size 0 \
       --input_nc 1 --output_nc 1 --loadSize "$SIZE" --fineSize "$SIZE" \

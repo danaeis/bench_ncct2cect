@@ -65,6 +65,11 @@ SAVE_EPOCH_FREQ="${SAVE_EPOCH_FREQ:-5}"
 # it discourages the generator from shifting HU where no contrast is expected --
 # so we keep the default rather than silently zeroing it.
 LAMBDA_IDT="${LAMBDA_IDT:-0.5}"
+# Resume an interrupted run instead of silently restarting at epoch 1 and
+# overwriting the checkpoints. EPOCH_COUNT overrides the epoch the lr schedule
+# restarts from (default: one past the newest numbered checkpoint).
+RESUME="${RESUME:-1}"
+EPOCH_COUNT="${EPOCH_COUNT:-}"
 OUT_NIFTI="${OUT_NIFTI:-$CYCLEGAN/results/vindr_nifti}"
 
 PY="${PYTHON:-python3}"
@@ -130,6 +135,37 @@ resolve_split() {
   exit 1
 }
 
+# Newest <epoch>_net_G_A.pth in a checkpoints dir, or empty if there are none.
+latest_numbered_epoch() {
+  ls "$1"/[0-9]*_net_G_A.pth 2>/dev/null \
+    | sed 's#.*/##; s#_net_G_A\.pth$##' \
+    | grep -E '^[0-9]+$' | sort -n | tail -1
+}
+
+# Populate $RESUME_ARGS: the flags that make train.py pick up where it stopped,
+# or nothing if there is no checkpoint to resume from.
+#
+# Like ResViT, CycleGAN stores no "current epoch", so the restart point comes
+# from the newest NUMBERED checkpoint (every --save_epoch_freq epochs), while
+# `latest_net_*.pth` is refreshed every --save_latest_freq iterations. The
+# reloaded weights can therefore be slightly ahead of the epoch the lr schedule
+# resumes at — safe (it replays at most SAVE_EPOCH_FREQ epochs of schedule), but
+# not bit-identical to an uninterrupted run. Pin EPOCH_COUNT to be exact.
+RESUME_ARGS=()
+set_resume_args() {
+  RESUME_ARGS=()
+  local dir="$1" n start
+  [ "$RESUME" = 1 ] || return 0
+  if [ ! -f "$dir/latest_net_G_A.pth" ]; then
+    echo "  RESUME: no $dir/latest_net_G_A.pth — starting from scratch"
+    return 0
+  fi
+  n="$(latest_numbered_epoch "$dir")"
+  start="${EPOCH_COUNT:-$(( ${n:-0} + 1 ))}"
+  RESUME_ARGS=(--continue_train --epoch latest --epoch_count "$start")
+  echo "  RESUME: continuing from $dir/latest_net_G_A.pth at epoch $start"
+}
+
 # ---- stages -----------------------------------------------------------------
 do_setup() {
   log setup "check CycleGAN tree"
@@ -157,8 +193,10 @@ do_train() {
   [ -d "$DATAROOT/trainA" ] || { echo "ERROR: $DATAROOT/trainA missing (run prep first)" >&2; exit 1; }
   log train "CycleGAN A=NCCT -> B=CECT ($NITER + $NITER_DECAY epochs)"
   apply_shims
+  set_resume_args "$CYCLEGAN/checkpoints/$NAME"
   cd "$CYCLEGAN"
   CUDA_VISIBLE_DEVICES="$CUDA_MASK" "$PY" train.py --dataroot "$DATAROOT" --name "$NAME" \
+      ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} \
       --model cycle_gan --dataset_mode unaligned --direction AtoB \
       --input_nc 1 --output_nc 1 --load_size "$SIZE" --crop_size "$SIZE" \
       --preprocess none --no_flip \

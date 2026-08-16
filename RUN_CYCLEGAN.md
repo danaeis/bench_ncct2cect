@@ -44,8 +44,21 @@ already covers the paired-adversarial corner.
 | `reassemble` | slices → per-case CECT NIfTI (HU, source grid) + `manifest.csv` |
 
 Tunables (env): `SPLIT`, `DATAROOT`, `SIZE` (256), `GPU`, `NAME`, `NITER` /
-`NITER_DECAY`, `BATCH`, `WORKERS`, `LAMBDA_IDT`, `SAVE_EPOCH_FREQ`, `OUT_NIFTI`,
-`MIN_TISSUE_FRAC`.
+`NITER_DECAY`, `BATCH`, `WORKERS`, `LAMBDA_IDT`, `SAVE_EPOCH_FREQ`, `RESUME`,
+`EPOCH_COUNT`, `OUT_NIFTI`, `MIN_TISSUE_FRAC`.
+
+## Resuming after a crash or a reboot
+
+`RESUME=1` is the **default**: re-running `./run_cyclegan.sh train` continues
+from `checkpoints/<name>/latest_net_G_A.pth` rather than restarting at epoch 1
+and overwriting the checkpoints.
+
+The restart epoch comes from the newest **numbered** checkpoint
+(`<epoch>_net_G_A.pth`, every `SAVE_EPOCH_FREQ`), while `latest_net_*.pth` is
+refreshed every `--save_latest_freq` iterations, so the reloaded weights can be
+slightly ahead of the epoch the lr schedule resumes at. Safe, but not
+bit-identical to an uninterrupted run — pin `EPOCH_COUNT=N` to be exact, or
+`RESUME=0` to start clean.
 
 Smoke-test before committing to a full run:
 

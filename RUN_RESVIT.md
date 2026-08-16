@@ -27,7 +27,26 @@ SPLIT=../synthetic_CECT/splits/split.json GPU=0 ./run_resvit.sh all
 
 Or run stages individually: `setup → prep → pretrain → finetune → test →
 reassemble`. Tunables (env vars): `SPLIT`, `DATAROOT`, `SIZE` (256), `GPU`,
-`NAME`, `PRE_NAME`, `NITER`/`NITER_DECAY`, `BATCH`, `OUT_NIFTI`.
+`NAME`, `PRE_NAME`, `NITER`/`NITER_DECAY`, `BATCH`, `RESUME`, `EPOCH_COUNT`,
+`OUT_NIFTI`.
+
+## Resuming after a crash or a reboot
+
+`RESUME=1` is the **default**. Re-running `./run_resvit.sh pretrain` (or
+`finetune`) picks up from `checkpoints/<name>/latest_net_G.pth` instead of
+silently restarting at epoch 1 and overwriting everything — the failure mode
+that looks like "still training after four days".
+
+The restart epoch is derived from the newest **numbered** checkpoint
+(`<epoch>_net_G.pth`, written every `SAVE_EPOCH_FREQ`), while `latest_net_G.pth`
+is refreshed every `--save_latest_freq` iterations. So the reloaded weights can
+be slightly *ahead* of the epoch the lr schedule resumes at. That is safe — it
+replays at most `SAVE_EPOCH_FREQ` epochs of schedule — but a resumed run's lr
+curve is not bit-identical to an uninterrupted one. Pin it exactly with
+`EPOCH_COUNT=N`, or force a clean start with `RESUME=0`.
+
+Lower `SAVE_EPOCH_FREQ` if you expect interruptions: it controls both how often
+a numbered checkpoint lands and how precisely a resume can be placed.
 
 Smoke-test first with tiny epochs before committing to a full run:
 ```bash
