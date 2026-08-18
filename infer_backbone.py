@@ -16,6 +16,7 @@ benefit, since nothing downstream looks at them by eye.)
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +47,8 @@ def main() -> None:
     ap.add_argument('--device', default='cuda')
     args = ap.parse_args()
 
+    if os.environ.get('DISABLE_CUDNN') == '1':
+        torch.backends.cudnn.enabled = False       # see nocudnn.py / preflight_gpu.py
     device = torch.device(args.device if torch.cuda.is_available() or args.device == 'cpu'
                           else 'cpu')
     ckpt = args.checkpoints_dir / args.name / f'{args.which_epoch}_net_G.pth'

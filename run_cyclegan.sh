@@ -74,6 +74,11 @@ OUT_NIFTI="${OUT_NIFTI:-$CYCLEGAN/results/vindr_nifti}"
 
 PY="${PYTHON:-python3}"
 
+# DISABLE_CUDNN=1 routes the upstream entrypoints through nocudnn.py, which turns
+# cuDNN off before the first conv. For a broken cuDNN runtime on an otherwise
+# supported GPU (see preflight_gpu.py); costs speed, needs no reinstall.
+if [ "${DISABLE_CUDNN:-0}" = 1 ]; then RUNPY=("$PY" "$HERE/nocudnn.py"); else RUNPY=("$PY"); fi
+
 # This CycleGAN HEAD has no --gpu_ids: util.init_ddp() picks cuda:0 when CUDA is
 # visible and CPU otherwise, so the GPU is selected by masking the device list.
 # GPU=-1 therefore means "hide every GPU", i.e. run on CPU.
@@ -83,6 +88,12 @@ if [ "$GPU" = "-1" ]; then CUDA_MASK=""; else CUDA_MASK="$GPU"; fi
 # the client stalls on retries.
 export no_proxy="localhost,127.0.0.1,::1${no_proxy:+,$no_proxy}"
 export NO_PROXY="$no_proxy"
+
+# TensorFlow, if anything in the env drags it in (MONAI pulls TensorBoard, which
+# prefers real TF when installed), grabs essentially ALL GPU memory on first use.
+# Harmless no-op when TF is absent; prevents a starved trainer when it is not.
+export TF_FORCE_GPU_ALLOW_GROWTH=true
+
 
 log() { printf '\n\033[1;36m[run_cyclegan:%s]\033[0m %s\n' "$1" "$2"; }
 
@@ -94,22 +105,8 @@ log() { printf '\n\033[1;36m[run_cyclegan:%s]\033[0m %s\n' "$1" "$2"; }
 require_cuda() {
   [ "${ALLOW_CPU:-0}" = 1 ] && return 0
   [ "$GPU" = "-1" ] && return 0
-  CUDA_VISIBLE_DEVICES="$CUDA_MASK" "$PY" - <<'EOF' || exit 1
-import sys, torch
-if torch.cuda.is_available():
-    print(f"  cuda ok: {torch.cuda.get_device_name(0)} | torch {torch.__version__} "
-          f"(built for CUDA {torch.version.cuda})")
-    sys.exit(0)
-print(f"ERROR: CUDA is not available. torch {torch.__version__} was built for CUDA "
-      f"{torch.version.cuda}.", file=sys.stderr)
-print("  Check what the driver supports and install a matching torch:", file=sys.stderr)
-print("    nvidia-smi --query-gpu=driver_version --format=csv", file=sys.stderr)
-print("    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126",
-      file=sys.stderr)
-print("  Or set ALLOW_CPU=1 / GPU=-1 to run on CPU anyway (it will not finish).",
-      file=sys.stderr)
-sys.exit(1)
-EOF
+  CUDA_VISIBLE_DEVICES="$CUDA_MASK" "$PY" "$HERE/preflight_gpu.py" || {
+    echo "  (preflight failed — refusing to start; ALLOW_CPU=1 overrides)" >&2; exit 1; }
 }
 
 # `sed -i` takes a mandatory suffix on BSD/macOS and none on GNU; write through a
@@ -222,7 +219,7 @@ do_train() {
   apply_shims
   set_resume_args "$CYCLEGAN/checkpoints/$NAME"
   cd "$CYCLEGAN"
-  CUDA_VISIBLE_DEVICES="$CUDA_MASK" "$PY" train.py --dataroot "$DATAROOT" --name "$NAME" \
+  CUDA_VISIBLE_DEVICES="$CUDA_MASK" "${RUNPY[@]}" train.py --dataroot "$DATAROOT" --name "$NAME" \
       ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} \
       --model cycle_gan --dataset_mode unaligned --direction AtoB \
       --input_nc 1 --output_nc 1 --load_size "$SIZE" --crop_size "$SIZE" \
@@ -243,7 +240,7 @@ do_test() {
   cd "$CYCLEGAN"
   # dataset_mode single reads a flat dir of images, so dataroot points AT testA.
   # --num_test defaults to 50 and would silently truncate the test set.
-  CUDA_VISIBLE_DEVICES="$CUDA_MASK" "$PY" test.py --dataroot "$DATAROOT/testA" --name "$NAME" \
+  CUDA_VISIBLE_DEVICES="$CUDA_MASK" "${RUNPY[@]}" test.py --dataroot "$DATAROOT/testA" --name "$NAME" \
       --model test --model_suffix _A --dataset_mode single \
       --input_nc 1 --output_nc 1 --load_size "$SIZE" --crop_size "$SIZE" \
       --preprocess none --no_flip --no_dropout \
@@ -275,7 +272,11 @@ case "$stage" in
   train)      do_train ;;
   test)       do_test ;;
   reassemble) do_reassemble ;;
-  all)        do_setup; do_prep; do_train; do_test; do_reassemble ;;
+# Each stage runs in its own SUBSHELL. Stages that train a vendored repo `cd`
+# into it, and that CWD used to leak into the stages that followed — which is how
+# `reassemble` ended up resolving the split's relative source paths against
+# <repo>/<vendor>/ and dying with "No such file or no access".
+  all)        (do_setup); (do_prep); (do_train); (do_test); (do_reassemble) ;;
   *) echo "usage: $0 [setup|prep|train|test|reassemble|all]" >&2; exit 2 ;;
 esac
 log "$stage" "done"

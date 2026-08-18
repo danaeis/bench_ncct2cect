@@ -55,6 +55,26 @@ def _load(p: str) -> np.ndarray:
     return np.asanyarray(nib.load(p).dataobj).astype(np.float32)
 
 
+def _abspath(raw: str, split: Path) -> str:
+    """A source path from split.json -> an absolute path string.
+
+    split.json stores paths relative to the directory the split was written from
+    (ours look like `../sample_data_reg/...`). Recording them verbatim in
+    slice_index.csv makes every later consumer — reassemble_nifti.py, and
+    benchmark.py through the manifest it writes — depend on being run from that
+    same CWD, which they are not. Resolve once, here.
+    """
+    if not raw:
+        return ''
+    p = Path(raw)
+    if p.is_absolute():
+        return str(p)
+    for root in (Path.cwd(), split.resolve().parent, split.resolve().parent.parent):
+        if (root / p).exists():
+            return str((root / p).resolve())
+    return str(p.resolve())          # keep going; the loader will report it
+
+
 def _to_unit(vol: np.ndarray, hu_min: float, hu_max: float) -> np.ndarray:
     v = np.clip(vol, hu_min, hu_max)
     return (v - hu_min) / (hu_max - hu_min)
@@ -197,7 +217,8 @@ def main():
                 index_rows.append({
                     'phase': phase, 'case_id': cid, 'z': z,
                     'native_h': H, 'native_w': W, 'native_z': nz,
-                    'real_path': case['cect'], 'mask_path': case.get('seg') or '',
+                    'real_path': _abspath(case['cect'], args.split),
+                    'mask_path': _abspath(case.get('seg') or '', args.split),
                     'target_phase': target_phase, 'out_ref': out_ref,
                 })
 

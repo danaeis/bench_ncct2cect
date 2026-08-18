@@ -22,6 +22,7 @@ Set --lambda_adv 0 for the non-adversarial (pure L1) ablation.
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -90,6 +91,8 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    if os.environ.get('DISABLE_CUDNN') == '1':
+        torch.backends.cudnn.enabled = False       # see nocudnn.py / preflight_gpu.py
     device = torch.device(args.device if torch.cuda.is_available() or args.device == 'cpu'
                           else 'cpu')
     if str(device) != args.device:

@@ -28,6 +28,7 @@ import csv
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import List, Optional
 
 import numpy as np
 import nibabel as nib
@@ -53,6 +54,50 @@ def _resize(sl: np.ndarray, h: int, w: int) -> np.ndarray:
     return np.asarray(im, dtype=np.float32) / 255.0
 
 
+def _candidate_roots(index: Path, extra: Optional[Path]) -> List[Path]:
+    """Directories a RELATIVE path in slice_index.csv might be relative to.
+
+    The index stores whatever `split.json` held, and our splits hold paths like
+    `../sample_data_reg/...` — relative to the repo root, i.e. to the CWD that
+    ran `prep`. Reassembly does not necessarily run from there (a runner that
+    `cd`s into a vendored repo for training leaves the CWD there), so resolve
+    against every plausible root instead of trusting the CWD.
+    """
+    roots = [extra] if extra else []
+    roots += [Path.cwd(), Path(__file__).resolve().parent]   # repo root
+    d = index.resolve().parent
+    for _ in range(4):                       # e.g. CyTran/datasets/vindr -> ...
+        roots.append(d)
+        if d == d.parent:
+            break
+        d = d.parent
+    out, seen = [], set()
+    for r in roots:
+        r = Path(r).resolve()
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def _resolve_data_path(raw: str, roots: List[Path]) -> Path:
+    """A path from the index -> an existing absolute path, or a clear error."""
+    p = Path(raw)
+    if p.is_file():
+        return p.resolve()
+    if not p.is_absolute():
+        for r in roots:
+            if (r / p).is_file():
+                return (r / p).resolve()
+    tried = '\n    '.join(str(r / p) for r in roots) if not p.is_absolute() else str(p)
+    raise SystemExit(
+        f"ERROR: source volume from slice_index.csv not found: {raw}\n"
+        f"  tried:\n    {tried}\n"
+        "  The index stores the paths that were in split.json. If they are "
+        "relative, run this from the directory prep was run in, or pass "
+        "--data_root <dir they are relative to>.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -68,7 +113,13 @@ def main():
     ap.add_argument('--hu_min', type=float, default=-200.0)
     ap.add_argument('--hu_max', type=float, default=400.0)
     ap.add_argument('--phase', default='test')
+    ap.add_argument('--data_root', type=Path, default=None,
+                    help='directory that RELATIVE real/mask paths in the index are '
+                         'relative to (default: try CWD, the repo root and the '
+                         "index's parents)")
     args = ap.parse_args()
+
+    roots = _candidate_roots(args.index, args.data_root)
 
     rows = [r for r in csv.DictReader(args.index.open()) if r['phase'] == args.phase]
     by_case = defaultdict(list)
@@ -119,12 +170,17 @@ def main():
         vol_hu = vol01 * (args.hu_max - args.hu_min) + args.hu_min
 
         # Save on the real CECT's affine/header so gen and real share a grid.
-        real_img = nib.load(ref['real_path'])
-        gen_path = args.out / f'{cid}_syn.nii.gz'
+        real_path = _resolve_data_path(ref['real_path'], roots)
+        real_img = nib.load(real_path)
+        gen_path = (args.out / f'{cid}_syn.nii.gz').resolve()
         nib.save(nib.Nifti1Image(vol_hu.astype(np.float32), real_img.affine, real_img.header),
                  gen_path)
-        manifest.append({'gen_path': str(gen_path), 'real_path': ref['real_path'],
-                         'mask_path': ref['mask_path'], 'target_phase': ref['target_phase']})
+        # Absolute paths in the manifest: benchmark.py runs from ../synthetic_CECT,
+        # where a relative path from our split would point somewhere else entirely.
+        mask_path = (str(_resolve_data_path(ref['mask_path'], roots))
+                     if ref['mask_path'] else '')
+        manifest.append({'gen_path': str(gen_path), 'real_path': str(real_path),
+                         'mask_path': mask_path, 'target_phase': ref['target_phase']})
 
     mf = args.out / 'manifest.csv'
     with mf.open('w', newline='') as f:

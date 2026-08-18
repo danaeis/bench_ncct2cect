@@ -85,6 +85,12 @@ PY="${PYTHON:-python3}"
 export no_proxy="localhost,127.0.0.1,::1${no_proxy:+,$no_proxy}"
 export NO_PROXY="$no_proxy"
 
+# TensorFlow, if anything in the env drags it in (MONAI pulls TensorBoard, which
+# prefers real TF when installed), grabs essentially ALL GPU memory on first use.
+# Harmless no-op when TF is absent; prevents a starved trainer when it is not.
+export TF_FORCE_GPU_ALLOW_GROWTH=true
+
+
 log() { printf '\n\033[1;36m[run_%s:%s]\033[0m %s\n' "$ARCH" "$1" "$2"; }
 
 # Fail loudly rather than training on CPU for days. A torch built for a newer
@@ -93,21 +99,8 @@ log() { printf '\n\033[1;36m[run_%s:%s]\033[0m %s\n' "$ARCH" "$1" "$2"; }
 # "Initialized with device cpu". ALLOW_CPU=1 to override deliberately.
 require_cuda() {
   [ "${ALLOW_CPU:-0}" = 1 ] && return 0
-  CUDA_VISIBLE_DEVICES="$GPU" "$PY" - <<'EOF' || exit 1
-import sys, torch
-if torch.cuda.is_available():
-    print(f"  cuda ok: {torch.cuda.get_device_name(0)} | torch {torch.__version__} "
-          f"(built for CUDA {torch.version.cuda})")
-    sys.exit(0)
-print(f"ERROR: CUDA is not available. torch {torch.__version__} was built for CUDA "
-      f"{torch.version.cuda}.", file=sys.stderr)
-print("  If the driver is older than that build, install a matching torch:", file=sys.stderr)
-print("    nvidia-smi --query-gpu=driver_version --format=csv   # driver's max CUDA", file=sys.stderr)
-print("    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126",
-      file=sys.stderr)
-print("  Or set ALLOW_CPU=1 to train on CPU anyway (it will not finish).", file=sys.stderr)
-sys.exit(1)
-EOF
+  CUDA_VISIBLE_DEVICES="$GPU" "$PY" "$HERE/preflight_gpu.py" || {
+    echo "  (preflight failed — refusing to start; ALLOW_CPU=1 overrides)" >&2; exit 1; }
 }
 
 resolve_split() {
@@ -247,7 +240,11 @@ case "$stage" in
   train)      do_train ;;
   test)       do_test ;;
   reassemble) do_reassemble ;;
-  all)        do_setup; do_prep; do_train; do_test; do_reassemble ;;
+# Each stage runs in its own SUBSHELL. Stages that train a vendored repo `cd`
+# into it, and that CWD used to leak into the stages that followed — which is how
+# `reassemble` ended up resolving the split's relative source paths against
+# <repo>/<vendor>/ and dying with "No such file or no access".
+  all)        (do_setup); (do_prep); (do_train); (do_test); (do_reassemble) ;;
   *) echo "usage: $0 [setup|prep|train|test|reassemble|all]" >&2; exit 2 ;;
 esac
 log "$stage" "done"

@@ -82,7 +82,27 @@ CONTRAST2="${CONTRAST2:-CECT}"   # target, our B
 PY="${PYTHON:-python3}"
 SLICES="$OUTPUT_PATH/$NAME/images"
 
+# SynDiff holds two NCSN++ UNets, two translators and four discriminators at
+# once, so it needs real headroom. preflight_gpu.py refuses to start when the
+# card has less free than this — a shared box that is already 74/79 GiB full
+# would otherwise OOM 20 minutes into epoch 0, inside upfirdn2d.
+MIN_FREE_GIB="${MIN_FREE_GIB:-16}"
+export MIN_FREE_GIB
+# Long diffusion runs allocate many differently-sized blocks; without this the
+# caching allocator fragments and reports OOM while nominally holding enough.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
 log() { printf '\n\033[1;36m[run_syndiff:%s]\033[0m %s\n' "$1" "$2"; }
+
+# Fail in five seconds instead of forty minutes in: no CUDA, an arch this torch
+# has no kernels for, a broken cuDNN, or a card somebody else has already
+# filled. See preflight_gpu.py; MIN_FREE_GIB tunes the last check.
+require_cuda() {
+  [ "${SKIP_PREFLIGHT:-0}" = 1 ] && return 0
+  CUDA_VISIBLE_DEVICES="$GPU" "$PY" "$HERE/preflight_gpu.py" || {
+    echo "  (preflight failed — refusing to start; pick a freer GPU with GPU=<id>," >&2
+    echo "   or SKIP_PREFLIGHT=1 to override)" >&2; exit 1; }
+}
 
 # SynDiff's dataset.py hardcodes 256: LoadDataSet pads every slice to 256x256
 # with pad=(256-shape)/2. At SIZE>256 that pad is negative and np.pad raises; at
@@ -217,6 +237,7 @@ do_train() {
   done
   require_size_256
   resolve_cuda || { echo "ERROR: nvcc not found; run \`$0 setup\` for details" >&2; exit 1; }
+  require_cuda
   log train "SynDiff $CONTRAST1 -> $CONTRAST2 ($NUM_EPOCH epochs, ckpt every $SAVE_CKPT_EVERY)"
   cd "$SYNDIFF"
   # train.py starts from epoch 0 unless --resume is passed, so without this an
@@ -252,6 +273,7 @@ do_infer() {
     exit 1
   fi
   resolve_cuda || { echo "ERROR: nvcc not found; run \`$0 setup\` for details" >&2; exit 1; }
+  require_cuda
   log infer "gen_diffusive_2 @ epoch $epoch -> *_fake_B.npy"
   CUDA_VISIBLE_DEVICES="$GPU" "$PY" "$HERE/infer_syndiff.py" \
       --syndiff "$SYNDIFF" --input_path "$DATAROOT" \
@@ -290,7 +312,11 @@ case "$stage" in
   train)      do_train ;;
   infer)      do_infer ;;
   reassemble) do_reassemble ;;
-  all)        do_setup; do_prep; do_train; do_infer; do_reassemble ;;
+# Each stage runs in its own SUBSHELL. Stages that train a vendored repo `cd`
+# into it, and that CWD used to leak into the stages that followed — which is how
+# `reassemble` ended up resolving the split's relative source paths against
+# <repo>/<vendor>/ and dying with "No such file or no access".
+  all)        (do_setup); (do_prep); (do_train); (do_infer); (do_reassemble) ;;
   *) echo "usage: $0 [setup|prep|train|infer|reassemble|all]" >&2; exit 2 ;;
 esac
 log "$stage" "done"

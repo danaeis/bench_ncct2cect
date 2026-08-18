@@ -203,7 +203,11 @@ case "$stage" in
   train)      do_train ;;
   infer)      do_infer ;;
   reassemble) do_reassemble ;;
-  all)        do_setup; do_prep; do_train; do_infer; do_reassemble ;;
+# Each stage runs in its own SUBSHELL. Stages that train a vendored repo `cd`
+# into it, and that CWD used to leak into the stages that followed — which is how
+# `reassemble` ended up resolving the split's relative source paths against
+# <repo>/<vendor>/ and dying with "No such file or no access".
+  all)        (do_setup); (do_prep); (do_train); (do_infer); (do_reassemble) ;;
   *) echo "usage: $0 [setup|prep|train|infer|reassemble|all]" >&2; exit 2 ;;
 esac
 log "$stage" "done"

@@ -57,6 +57,11 @@ VIT_CKPT="$VIT_DIR/R50+ViT-B_16.npz"   # exact name models/transformer_configs.p
 VIT_URL="https://storage.googleapis.com/vit_models/imagenet21k/R50%2BViT-B_16.npz"
 
 PY="${PYTHON:-python3}"
+
+# DISABLE_CUDNN=1 routes the upstream entrypoints through nocudnn.py, which turns
+# cuDNN off before the first conv. For a broken cuDNN runtime on an otherwise
+# supported GPU (see preflight_gpu.py); costs speed, needs no reinstall.
+if [ "${DISABLE_CUDNN:-0}" = 1 ]; then RUNPY=("$PY" "$HERE/nocudnn.py"); else RUNPY=("$PY"); fi
 GPU_IDS="$GPU"
 
 # Never route loopback through the site proxy: it answers CONNECT with 403 and the
@@ -64,7 +69,22 @@ GPU_IDS="$GPU"
 export no_proxy="localhost,127.0.0.1,::1${no_proxy:+,$no_proxy}"
 export NO_PROXY="$no_proxy"
 
+# TensorFlow, if anything in the env drags it in (MONAI pulls TensorBoard, which
+# prefers real TF when installed), grabs essentially ALL GPU memory on first use.
+# Harmless no-op when TF is absent; prevents a starved trainer when it is not.
+export TF_FORCE_GPU_ALLOW_GROWTH=true
+
+
 log() { printf '\n\033[1;36m[run_resvit:%s]\033[0m %s\n' "$1" "$2"; }
+
+# Fail fast rather than training on CPU, or dying at the first conv on a GPU this
+# torch/cuDNN cannot drive. See preflight_gpu.py. GPU=-1 or ALLOW_CPU=1 to skip.
+require_cuda() {
+  [ "${ALLOW_CPU:-0}" = 1 ] && return 0
+  [ "$GPU" = "-1" ] && return 0
+  CUDA_VISIBLE_DEVICES="$GPU" "$PY" "$HERE/preflight_gpu.py" || {
+    echo "  (preflight failed — refusing to start; ALLOW_CPU=1 overrides)" >&2; exit 1; }
+}
 
 # `sed -i` takes a mandatory suffix on BSD/macOS and none on GNU; write through a
 # temp file so this works on either. Fails loudly rather than leaving the source
@@ -185,11 +205,12 @@ do_prep() {
 }
 
 do_pretrain() {
+  require_cuda
   log pretrain "stage 1: res_cnn generator ($((NITER*2)) + $((NITER_DECAY*2)) epochs)"
   apply_shims
   set_resume_args "$RESVIT/checkpoints/$PRE_NAME"
   cd "$RESVIT"
-  "$PY" train.py --dataroot "$DATAROOT" --name "$PRE_NAME" --gpu_ids "$GPU_IDS" \
+  "${RUNPY[@]}" train.py --dataroot "$DATAROOT" --name "$PRE_NAME" --gpu_ids "$GPU_IDS" \
       ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} \
       --model resvit_one --which_model_netG res_cnn --which_direction AtoB \
       --lambda_A 100 --dataset_mode aligned --norm batch --pool_size 0 \
@@ -201,6 +222,7 @@ do_pretrain() {
 do_finetune() {
   local pre_weights="$RESVIT/checkpoints/$PRE_NAME/latest_net_G.pth"
   [ -f "$pre_weights" ] || { echo "ERROR: pretrain weights missing: $pre_weights (run pretrain first)" >&2; exit 1; }
+  require_cuda
   log finetune "stage 2: full ResViT from $pre_weights"
   apply_shims
   # NB: on a resume the --pre_trained_* flags below are harmless — resvit_one
@@ -208,7 +230,7 @@ do_finetune() {
   # overwrites netG/netD with the fine-tune checkpoint.
   set_resume_args "$RESVIT/checkpoints/$NAME"
   cd "$RESVIT"
-  "$PY" train.py --dataroot "$DATAROOT" --name "$NAME" --gpu_ids "$GPU_IDS" \
+  "${RUNPY[@]}" train.py --dataroot "$DATAROOT" --name "$NAME" --gpu_ids "$GPU_IDS" \
       ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} \
       --model resvit_one --which_model_netG resvit --which_direction AtoB \
       --lambda_A 100 --dataset_mode aligned --norm batch --pool_size 0 \
@@ -221,10 +243,11 @@ do_finetune() {
 }
 
 do_test() {
+  require_cuda
   log test "inference on the test split -> *_fake_B.png"
   apply_shims
   cd "$RESVIT"
-  "$PY" test.py --dataroot "$DATAROOT" --name "$NAME" --gpu_ids "$GPU_IDS" \
+  "${RUNPY[@]}" test.py --dataroot "$DATAROOT" --name "$NAME" --gpu_ids "$GPU_IDS" \
       --model resvit_one --which_model_netG resvit --dataset_mode aligned \
       --norm batch --phase test --input_nc 1 --output_nc 1 \
       --loadSize "$SIZE" --fineSize "$SIZE" --how_many 1000000 --serial_batches \
@@ -255,7 +278,11 @@ case "$stage" in
   finetune)   do_finetune ;;
   test)       do_test ;;
   reassemble) do_reassemble ;;
-  all)        do_setup; do_prep; do_pretrain; do_finetune; do_test; do_reassemble ;;
+# Each stage runs in its own SUBSHELL. Stages that train a vendored repo `cd`
+# into it, and that CWD used to leak into the stages that followed — which is how
+# `reassemble` ended up resolving the split's relative source paths against
+# <repo>/<vendor>/ and dying with "No such file or no access".
+  all)        (do_setup); (do_prep); (do_pretrain); (do_finetune); (do_test); (do_reassemble) ;;
   *) echo "usage: $0 [setup|prep|pretrain|finetune|test|reassemble|all]" >&2; exit 2 ;;
 esac
 log "$stage" "done"
