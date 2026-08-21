@@ -95,7 +95,7 @@ NITER=1 NITER_DECAY=0 ./run_resvit.sh finetune
 ```bash
 cd ../synthetic_CECT
 python benchmark.py --weights orgFeatXGB_CTPhase/xgb_vindr_full.pkl \
-    --manifest resvit=../ncct2cect/ResViT/results/vindr_nifti/manifest.csv \
+    --manifest resvit=../bench_ncct2cect/ResViT/results/vindr_nifti/manifest.csv \
     --baseline ours --out analysis/benchmark
 # → analysis/benchmark/master_table.md
 ```

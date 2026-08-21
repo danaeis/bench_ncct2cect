@@ -113,7 +113,11 @@ NITER=1 NITER_DECAY=0 SAVE_EPOCH_FREQ=1 ./run_cyclegan.sh train
 ```bash
 cd ../synthetic_CECT
 python benchmark.py --weights orgFeatXGB_CTPhase/xgb_vindr_full.pkl \
-    --manifest cyclegan=../ncct2cect/CycleGAN/results/vindr_nifti/manifest.csv \
-    --baseline ours --out analysis/benchmark
-# → analysis/benchmark/master_table.md
+    --manifest cyclegan=../bench_ncct2cect/CycleGAN/results/vindr_nifti/manifest.csv \
+    --baseline ours --out analysis/bench_ncct2cect
+# → analysis/bench_ncct2cect/master_table.md
 ```
+
+`analysis/bench_ncct2cect` — NOT `analysis/benchmark`, which is this repo's *own*
+loss/architecture ablation store (see RUN_ALL.md §2). Scoring an external
+baseline into it would mix a competing model into that internal comparison.

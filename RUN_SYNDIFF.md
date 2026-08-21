@@ -154,6 +154,10 @@ of any run raised `IndexError` *after* the entire training cost had been paid.
 ```bash
 cd ../synthetic_CECT && python benchmark.py \
     --weights orgFeatXGB_CTPhase/xgb_vindr_full.pkl \
-    --manifest syndiff=../ncct2cect/SynDiff/results/vindr_nifti/manifest.csv \
-    --baseline ours --out analysis/benchmark
+    --manifest syndiff=../bench_ncct2cect/SynDiff/results/vindr_nifti/manifest.csv \
+    --baseline ours --out analysis/bench_ncct2cect
 ```
+
+`analysis/bench_ncct2cect` — NOT `analysis/benchmark`, which is this repo's *own*
+loss/architecture ablation store (see RUN_ALL.md §2). Scoring an external
+baseline into it would mix a competing model into that internal comparison.

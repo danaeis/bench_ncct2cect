@@ -138,14 +138,18 @@ it being their model.
 cd ../synthetic_CECT
 python benchmark.py --weights orgFeatXGB_CTPhase/xgb_vindr_full.pkl \
     --manifest ours=../out_synthesis_train/literature_baseline_l1_organ_curriculum/phase_infer/manifest.csv \
-    --manifest resvit=../ncct2cect/ResViT/results/vindr_nifti/manifest.csv \
-    --manifest cytran=../ncct2cect/CyTran/results/vindr_nifti/manifest.csv \
-    --baseline ours --out analysis/benchmark
-# → analysis/benchmark/master_table.md
+    --manifest resvit=../bench_ncct2cect/ResViT/results/vindr_nifti/manifest.csv \
+    --manifest cytran=../bench_ncct2cect/CyTran/results/vindr_nifti/manifest.csv \
+    --baseline ours --out analysis/bench_ncct2cect
+# → analysis/bench_ncct2cect/master_table.md
 ```
 
-Keep passing every manifest you have each time — `benchmark.py` rebuilds the
-whole table, so the run that adds CyTran should still include ours and ResViT.
+`analysis/bench_ncct2cect` — NOT `analysis/benchmark`, which is this repo's *own*
+loss/architecture ablation store (RUN_ALL.md §2). Also: you don't need to keep
+re-passing `resvit`'s manifest each time — it's already cached in
+`analysis/bench_ncct2cect/store` (see RUN_ALL.md, "results accumulate"). Add
+`--manifest ours=...` once you've picked which of your own runs is `ours`;
+until then, drop that line and score the external baselines on their own.
 
 ## Next module: SynDiff
 

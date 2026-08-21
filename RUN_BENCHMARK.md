@@ -95,7 +95,7 @@ Per model, after its adapter runs:
 cd synthetic_CECT
 python benchmark.py --weights orgFeatXGB_CTPhase/xgb_vindr_full.pkl \
   --manifest ours=../out_synthesis_train/literature_baseline_l1_organ_curriculum/phase_infer/manifest.csv \
-  --manifest resvit=../ncct2cect/ResViT/<out>/manifest.csv \
+  --manifest resvit=../bench_ncct2cect/ResViT/<out>/manifest.csv \
   --baseline ours --out analysis/benchmark
 ```
 

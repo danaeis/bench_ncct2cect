@@ -209,16 +209,19 @@ run, so the 6th model retroactively updates the table for the first 5.
 ```bash
 cd ../synthetic_CECT
 W=orgFeatXGB_CTPhase/xgb_vindr_full.pkl
-OUT=analysis/benchmark
+OUT=analysis/bench_ncct2cect   # NOT analysis/benchmark — that is this repo's OWN
+                                # loss/architecture ablation store (RUN_ALL.md §2);
+                                # scoring externals into it mixes two different
+                                # comparisons into one table.
 
 # as each model finishes — one invocation per model, nothing is re-scored
 python benchmark.py --weights $W --out $OUT --perceptual --baseline ours \
     --manifest ours=../out_synthesis_train/literature_baseline_l1_organ_curriculum/phase_infer/manifest.csv
 python benchmark.py --weights $W --out $OUT --perceptual --baseline ours \
-    --manifest resvit=../ncct2cect/ResViT/results/vindr_nifti/manifest.csv
+    --manifest resvit=../bench_ncct2cect/ResViT/results/vindr_nifti/manifest.csv
 python benchmark.py --weights $W --out $OUT --perceptual --baseline ours \
-    --manifest syndiff=../ncct2cect/SynDiff/results/vindr_nifti/manifest.csv
-# → analysis/benchmark/master_table.md, with every model scored so far
+    --manifest syndiff=../bench_ncct2cect/SynDiff/results/vindr_nifti/manifest.csv
+# → analysis/bench_ncct2cect/master_table.md, with every model scored so far
 
 python benchmark.py --weights $W --out $OUT --list_store   # what is cached
 python benchmark.py --weights $W --out $OUT --drop resvit  # retire a superseded run

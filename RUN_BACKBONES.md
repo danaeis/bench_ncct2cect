@@ -181,8 +181,8 @@ NITER=1 NITER_DECAY=0 SAVE_EPOCH_FREQ=1 ./run_swinunetr.sh train
 ```bash
 cd ../synthetic_CECT
 python benchmark.py --weights orgFeatXGB_CTPhase/xgb_vindr_full.pkl \
-    --manifest swinunetr=../ncct2cect/results/vindr_swinunetr_nifti/manifest.csv \
-    --manifest transunet=../ncct2cect/results/vindr_transunet_nifti/manifest.csv \
+    --manifest swinunetr=../bench_ncct2cect/results/vindr_swinunetr_nifti/manifest.csv \
+    --manifest transunet=../bench_ncct2cect/results/vindr_transunet_nifti/manifest.csv \
     --baseline ours --out analysis/benchmark
 # → analysis/benchmark/master_table.md
 ```
