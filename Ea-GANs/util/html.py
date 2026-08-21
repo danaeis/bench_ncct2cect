@@ -12,7 +12,6 @@ class HTML:
             os.makedirs(self.web_dir)
         if not os.path.exists(self.img_dir):
             os.makedirs(self.img_dir)
-        # print(self.img_dir)
 
         self.doc = dominate.document(title=title)
         if reflesh > 0:
@@ -47,18 +46,3 @@ class HTML:
         f = open(html_file, 'wt')
         f.write(self.doc.render())
         f.close()
-
-
-if __name__ == '__main__':
-    html = HTML('web/', 'test_html')
-    html.add_header('hello world')
-
-    ims = []
-    txts = []
-    links = []
-    for n in range(4):
-        ims.append('image_%d.png' % n)
-        txts.append('text_%d' % n)
-        links.append('image_%d.png' % n)
-    html.add_images(ims, txts, links)
-    html.save()

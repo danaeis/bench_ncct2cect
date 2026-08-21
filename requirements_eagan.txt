@@ -1,0 +1,24 @@
+# Deps for the Ea-GANs benchmark path (2-D port + the vendored Ea-GANs/ tree).
+# Install into a DEDICATED env on the GPU server (do not merge with SynDiff /
+# CFPS-Diff envs — their torch pins conflict). Can be shared with ResViT/CyTran
+# if you want one less venv; no version conflicts with either.
+#
+#   python -m venv .venv_eagan && source .venv_eagan/bin/activate
+#   pip install -r requirements_eagan.txt
+#
+# run_eagan.sh trains gea_gan or dea_gan (MODEL=gea_gan|dea_gan) on the same
+# pix2pix AB-PNG slices ResViT/CyTran use — see RUN_EAGAN.md for why this is a
+# 2-D port of upstream (github.com/by-lab/Ea-GANs is natively 3-D/volumetric).
+
+# --- deep learning (pick the torch build matching your CUDA) ---
+torch>=1.7.1
+torchvision>=0.8.2
+
+# --- Ea-GANs runtime ---
+dominate        # util/html.py, imported by the visualizer
+visdom          # only touched when --display_id > 0 (run_eagan.sh passes 0), but imported lazily
+
+# --- our NIfTI <-> slice adapters (prep_benchmark_data.py, reassemble_nifti.py) ---
+numpy
+nibabel
+Pillow

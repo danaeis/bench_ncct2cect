@@ -81,8 +81,9 @@ refuses the device outright, before any of our code runs.
 
 ## 1. Models to run
 
-`SPLIT=../synthetic_CECT/splits/split.json` throughout. All six share one prep of
-the pix2pix slices except CycleGAN and SynDiff, which need their own layouts.
+`SPLIT=../synthetic_CECT/splits/split.json` throughout. All but CycleGAN share
+one prep of the pix2pix slices (CycleGAN needs its own `{train,val,test}{A,B}/`
+layout).
 
 | # | model | command | notes |
 |---|---|---|---|
@@ -93,7 +94,12 @@ the pix2pix slices except CycleGAN and SynDiff, which need their own layouts.
 | 5 | SwinUNETR (2.5-D, 5) | `GPU=0 N_SLICES=5 NAME=vindr_swinunetr_s5 ./run_swinunetr.sh all` | 5-slice z-context |
 | 6 | SwinUNETR (2.5-D, 11) | `GPU=0 N_SLICES=11 NAME=vindr_swinunetr_s11 ./run_swinunetr.sh all` | 11-slice z-context |
 | 7 | TransUNet | `GPU=0 ./run_transunet.sh all` | ImageNet-21k init; `N_SLICES` must stay 1 |
-| 8 | SynDiff | `GPU=0 ./run_syndiff.sh all` | slowest by far; `RESUME=1`, content every epoch |
+| 8 | gEa-GAN | `GPU=0 ./run_eagan.sh all` | reuses ResViT's slices; 2-D port of by-lab/Ea-GANs (see `RUN_EAGAN.md`) |
+| 9 | dEa-GAN | `GPU=0 MODEL=dea_gan ./run_eagan.sh all` | same runner, edge loss on D too |
+
+**SynDiff dropped** (see `BENCHMARK.md`'s notes) — measured ~2s/it steady state
+at batch=1, projecting multi-week wall-clock; not worth the compute budget for
+this thesis. `run_syndiff.sh`/`RUN_SYNDIFF.md` still work if revisited later.
 
 Optional ablations, cheap and worth having:
 
@@ -155,7 +161,9 @@ Manifest paths per model:
 | SwinUNETR | `../bench_ncct2cect/results/vindr_swinunetr_nifti/manifest.csv` |
 | SwinUNETR s5 / s11 | `../bench_ncct2cect/results/vindr_swinunetr_s5_nifti/manifest.csv` (…`_s11_`) |
 | TransUNet | `../bench_ncct2cect/results/vindr_transunet_nifti/manifest.csv` |
-| SynDiff | `../bench_ncct2cect/SynDiff/results/vindr_nifti/manifest.csv` |
+| gEa-GAN | `../bench_ncct2cect/results/vindr_gea_gan_nifti/manifest.csv` |
+| dEa-GAN | `../bench_ncct2cect/results/vindr_dea_gan_nifti/manifest.csv` |
+| SynDiff (dropped) | `../bench_ncct2cect/SynDiff/results/vindr_nifti/manifest.csv` — not run, see `BENCHMARK.md` |
 
 Housekeeping:
 

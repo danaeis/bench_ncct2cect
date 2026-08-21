@@ -22,11 +22,17 @@ same-data comparison, not a reproduction.
 ## Models
 
 ### Pre-existing (GAN / CNN family)
-- `Ea-GANs/` — edge-aware GAN (cross-modality synthesis).
+- `Ea-GANs/` — edge-aware GAN (cross-modality synthesis). Integrated as
+  `run_eagan.sh` (see `RUN_EAGAN.md`) — a **2-D port** of upstream
+  [by-lab/Ea-GANs](https://github.com/by-lab/Ea-GANs), which is natively
+  volumetric (Conv3d, whole-3D-patch SimpleITK I/O). Ported to Conv2d + this
+  benchmark's pix2pix AB-PNG slices so it is comparable to ResViT/CyTran/
+  CycleGAN on the same split and metrics; see `RUN_EAGAN.md` for exactly what
+  changed. Both paper variants run via `MODEL=gea_gan|dea_gan`.
 - `VCE_CESM/` — virtual contrast enhancement.
 - `pix2pix3D-CT/` — 3D pix2pix for CT.
-- ⚠️ `Ea_GANs/` — appears to be a broken nested clone (contains only
-  `Ea_GANs/Ea_GANs`); `Ea-GANs/` (hyphen) is the real one. Recommend removing.
+- ⚠️ `Ea_GANs/` (no hyphen) — a broken duplicate zip artifact, removed; `Ea-GANs/`
+  (hyphen) above is the real one, now integrated.
 - ⚠️ `UnpairedImageTranslation/` — **superseded, do not use.** It is Kaji's
   **Chainer** reimplementation of CycleGAN; Chainer has been unmaintained since
   2019 and it would need a CUDA-10.2 `cupy` wheel (both sit unused in
@@ -49,6 +55,13 @@ Notes:
 - **ResViT and CyTran share the pix2pix/CycleGAN codebase** (options/, aligned-pair
   loaders) — one adapter pattern covers both. CyTran's README states it "is similar
   with CycleGAN-and-pix2pix".
+- ⚠️ **SynDiff dropped from the active run (compute budget).** Measured ~2.1–2.4s/it
+  steady state at `BATCH=1` with the default `NUM_EPOCH=50` (25,251
+  iterations/epoch, no `MIN_TISSUE_FRAC` filtering) — multi-week wall-clock on
+  this box, not worth it for this thesis's timeline. The adapter (`run_syndiff.sh`,
+  `RUN_SYNDIFF.md`) is not broken; revisit with a larger `BATCH` (VRAM headroom
+  was there — 17/80GB used), a shorter `NUM_EPOCH`, or a free multi-GPU window
+  if SynDiff's numbers turn out to matter later.
 - **SynDiff wants `.mat`** inputs (`(#images, W, H)`, [0,1]) — its adapter must
   convert NCCT/CECT slices to `.mat` and convert generated slices back to HU NIfTI.
 - **CycleGAN is the unpaired control.** Our slices are paired on disk, but

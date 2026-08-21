@@ -2,8 +2,6 @@ import os
 import torch
 
 
-
-
 class BaseModel():
     def name(self):
         return 'BaseModel'
@@ -54,7 +52,6 @@ class BaseModel():
         save_path = os.path.join(self.save_dir, save_filename)
         network.load_state_dict(torch.load(save_path))
         network.cuda(self.gpu_ids[0])
-
 
     def update_learning_rate():
         pass
